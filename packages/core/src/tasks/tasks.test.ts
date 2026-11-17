@@ -1,12 +1,12 @@
 import { okAsync } from 'neverthrow';
 import { describe, expect, it } from 'vitest';
 
-import { GoogleNotFoundError, GoogleResponseParseError, InvalidInputError } from '../errors';
+import { AmbiguousTaskListError, GoogleNotFoundError, GoogleResponseParseError, InvalidInputError, TaskListNotFoundError } from '../errors';
 import { createGoogleClient } from '../google-client';
 
-import { createTasksService } from './index';
+import { createTasksService, resolveTaskList } from './index';
 
-import type { ListTasksInput, UpdateTaskInput } from './index';
+import type { ListTasksInput, TaskListSummary, UpdateTaskInput } from './index';
 
 type Captured = { url: string; init: RequestInit | undefined };
 
@@ -508,5 +508,54 @@ describe('listTasks', () => {
     expect(error.message).toContain(`${maxResults}`);
     expect(error.message).toContain('1 and 100');
     expect(calls).toHaveLength(0);
+  });
+});
+
+describe('resolveTaskList', () => {
+  const summary = (id: string, title: string): TaskListSummary => ({ id, title, updated: '2026-11-17T00:00:00.000Z' });
+  const LISTS: readonly TaskListSummary[] = [summary('MDE', 'マイタスク'), summary('MDI', '日常タスク'), summary('MDV', 'VRC タスク')];
+
+  it('matches a list id exactly', () => {
+    expect(resolveTaskList(LISTS, 'MDI')._unsafeUnwrap()).toStrictEqual(LISTS[1]);
+  });
+
+  it('matches a title', () => {
+    expect(resolveTaskList(LISTS, '日常タスク')._unsafeUnwrap()).toStrictEqual(LISTS[1]);
+  });
+
+  it('matches a title case-insensitively after NFKC normalization and trimming', () => {
+    // Full-width "ＶＲＣ", an ideographic space, surrounding blanks.
+    expect(resolveTaskList(LISTS, '  ｖｒｃ\u3000タスク ')._unsafeUnwrap()).toStrictEqual(LISTS[2]);
+  });
+
+  it('prefers an id match over a title that equals it', () => {
+    const lists = [summary('A', 'B'), summary('B', 'other')];
+    expect(resolveTaskList(lists, 'B')._unsafeUnwrap()).toStrictEqual(lists[1]);
+  });
+
+  it('does not match an id case-insensitively', () => {
+    expect(resolveTaskList(LISTS, 'mdi')._unsafeUnwrapErr()).toBeInstanceOf(TaskListNotFoundError);
+  });
+
+  it('fails with TaskListNotFoundError naming the query and every list title', () => {
+    const error = resolveTaskList(LISTS, 'nope')._unsafeUnwrapErr();
+    expect(error).toBeInstanceOf(TaskListNotFoundError);
+    expect(error.message).toContain('"nope"');
+    expect(error.message).toContain('"マイタスク", "日常タスク", "VRC タスク"');
+    expect(error.message).toContain('@default');
+  });
+
+  it('says when there are no task lists at all', () => {
+    expect(resolveTaskList([], 'nope')._unsafeUnwrapErr().message).toContain('no task lists');
+  });
+
+  it('fails with AmbiguousTaskListError listing the candidates with their ids', () => {
+    const lists = [summary('L1', 'Work'), summary('L2', 'work '), summary('L3', 'Home')];
+    const error = resolveTaskList(lists, 'WORK')._unsafeUnwrapErr();
+    expect(error).toBeInstanceOf(AmbiguousTaskListError);
+    expect(error.message).toContain('"WORK"');
+    expect(error.message).toContain('"Work" (id L1)');
+    expect(error.message).toContain('"work " (id L2)');
+    expect(error.message).not.toContain('L3');
   });
 });

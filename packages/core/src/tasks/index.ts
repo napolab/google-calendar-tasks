@@ -2,7 +2,7 @@ import { err, ok, okAsync } from 'neverthrow';
 import { z } from 'zod';
 
 import { dayjs } from '../dayjs';
-import { InvalidInputError } from '../errors';
+import { AmbiguousTaskListError, InvalidInputError, TaskListNotFoundError } from '../errors';
 
 import type { GoogleError } from '../errors';
 import type { GoogleClient, QueryValue } from '../google-client';
@@ -10,7 +10,8 @@ import type { Result, ResultAsync } from 'neverthrow';
 
 const BASE_URL = 'https://tasks.googleapis.com/tasks/v1';
 
-const DEFAULT_TASK_LIST_ID = '@default';
+// Google's alias for the user's default task list; valid wherever a task list id is.
+export const DEFAULT_TASK_LIST_ID = '@default';
 
 // ---------------------------------------------------------------------------------------------
 // Output (read side: normalized, every state is a named variant — no optional fields)
@@ -601,6 +602,56 @@ const reopenTask =
   (client: GoogleClient) =>
   (input: TaskRef): ResultAsync<Task, GoogleError> =>
     patchTask(client, input, { status: 'needsAction', completed: null });
+
+// ---------------------------------------------------------------------------------------------
+// resolveTaskList: a task list named by id or title (pure, shared by the CLI and the MCP server)
+// ---------------------------------------------------------------------------------------------
+
+type TaskListMatch =
+  | { readonly kind: 'id'; readonly list: TaskListSummary }
+  | { readonly kind: 'title'; readonly list: TaskListSummary }
+  | { readonly kind: 'none' }
+  | { readonly kind: 'ambiguous'; readonly candidates: readonly TaskListSummary[] };
+
+// Titles compare after NFKC (full-width ↔ half-width), trimming and case folding.
+const normalizeTitle = (title: string): string => title.normalize('NFKC').trim().toLowerCase();
+
+const matchByTitle = (lists: readonly TaskListSummary[], query: string): TaskListMatch => {
+  const wanted = normalizeTitle(query);
+  const [first, ...rest] = lists.filter((list) => normalizeTitle(list.title) === wanted);
+  if (first === undefined) return { kind: 'none' };
+  return rest.length === 0 ? { kind: 'title', list: first } : { kind: 'ambiguous', candidates: [first, ...rest] };
+};
+
+// An exact id wins over any title.
+const matchTaskList = (lists: readonly TaskListSummary[], query: string): TaskListMatch => {
+  const byId = lists.find((list) => list.id === query);
+  return byId === undefined ? matchByTitle(lists, query) : { kind: 'id', list: byId };
+};
+
+// Finds the task list `query` names: an exact id, else a title (NFKC, trimmed, case-insensitive).
+// `DEFAULT_TASK_LIST_ID` is not a list in `lists` — callers pass it through as the id without resolving it.
+export const resolveTaskList = (lists: readonly TaskListSummary[], query: string): Result<TaskListSummary, TaskListNotFoundError | AmbiguousTaskListError> => {
+  const match = matchTaskList(lists, query);
+  switch (match.kind) {
+    case 'id':
+    case 'title':
+      return ok(match.list);
+    case 'none':
+      return err(
+        new TaskListNotFoundError(
+          query,
+          lists.map((list) => list.title),
+        ),
+      );
+    case 'ambiguous':
+      return err(new AmbiguousTaskListError(query, match.candidates));
+    default: {
+      const _exhaustive: never = match;
+      throw new Error(`unhandled task list match: ${JSON.stringify(_exhaustive)}`);
+    }
+  }
+};
 
 export const createTasksService = (deps: TasksServiceDeps): ITasksService => ({
   listTaskLists: () => fetchTaskListPages(deps.client, undefined, []),

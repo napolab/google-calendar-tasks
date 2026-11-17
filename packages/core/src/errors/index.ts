@@ -50,4 +50,38 @@ export class InvalidInputError extends Error {
   override name = 'InvalidInputError' as const;
 }
 
+// A task list named by title or id (e.g. a CLI `--list` value or an MCP tool argument).
+export type TaskListCandidate = { readonly id: string; readonly title: string };
+
+const quoteTitles = (titles: readonly string[]): string => titles.map((title) => `"${title}"`).join(', ');
+
+const describeLists = (titles: readonly string[]): string => (titles.length === 0 ? 'There are no task lists in this account' : `Available task lists: ${quoteTitles(titles)}`);
+
+// No task list has this id or title. Lists every title so the caller can retry with one.
+export class TaskListNotFoundError extends Error {
+  override name = 'TaskListNotFoundError' as const;
+  readonly query: string;
+  readonly titles: readonly string[];
+
+  constructor(query: string, titles: readonly string[]) {
+    super(`No task list has the id or title "${query}". ${describeLists(titles)}. Pass one of these titles, a task list id, or "@default" for the default list.`);
+    this.query = query;
+    this.titles = titles;
+  }
+}
+
+// Several task lists share this title. Lists them with their ids so the caller can pass an id instead.
+export class AmbiguousTaskListError extends Error {
+  override name = 'AmbiguousTaskListError' as const;
+  readonly query: string;
+  readonly candidates: readonly TaskListCandidate[];
+
+  constructor(query: string, candidates: readonly TaskListCandidate[]) {
+    const listed = candidates.map((candidate) => `"${candidate.title}" (id ${candidate.id})`).join(', ');
+    super(`Task list "${query}" is ambiguous: ${candidates.length} lists have that title: ${listed}. Pass the id of the one you mean instead of the title.`);
+    this.query = query;
+    this.candidates = candidates;
+  }
+}
+
 export type GoogleError = GoogleAuthError | GooglePermissionError | GoogleNotFoundError | GoogleRateLimitError | GoogleAPIError | GoogleNetworkError | GoogleResponseParseError;
