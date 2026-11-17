@@ -22,6 +22,9 @@ export const MCP_TOOL_NAMES = [
   'complete_task',
   'reopen_task',
   'delete_task',
+  'create_task_list',
+  'rename_task_list',
+  'delete_task_list',
 ] as const;
 
 // The JSON Schema validator is injected explicitly: the SDK's default is chosen by build-time export conditions and

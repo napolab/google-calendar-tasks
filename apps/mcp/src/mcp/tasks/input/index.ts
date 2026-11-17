@@ -1,6 +1,6 @@
 import { dayjs } from '@napolab/gct-core/dayjs';
 import { InvalidInputError } from '@napolab/gct-core/errors';
-import { DEFAULT_TASK_LIST_ID } from '@napolab/gct-core/tasks';
+import { DEFAULT_TASK_LIST_ID, validateDeletableTaskListId, validateTaskListTitle } from '@napolab/gct-core/tasks';
 import { Result, err, ok } from 'neverthrow';
 import { z } from 'zod';
 
@@ -8,9 +8,11 @@ import { parseDate } from '../../time-input';
 
 import type {
   CreateTaskInput,
+  CreateTaskListInput,
   FieldPatch,
   KeepOrSet,
   ListTasksInput,
+  RenameTaskListInput,
   TaskDue,
   TaskDueFilter,
   TaskPageRequest,
@@ -67,10 +69,26 @@ export const updateTaskArgs = z.strictObject({
   clearDue: z.boolean().optional().describe('true removes the due date.'),
 });
 
+const taskListTitleArg = z.string().describe('Task list title (non-empty, at most 1024 characters).');
+
+export const createTaskListArgs = z.strictObject({ title: taskListTitleArg });
+
+export const renameTaskListArgs = z.strictObject({
+  list: z.string().min(1).describe("The task list to rename: an id or a title from list_task_lists, or '@default'."),
+  title: taskListTitleArg.describe('New task list title (non-empty, at most 1024 characters).'),
+});
+
+export const deleteTaskListArgs = z.strictObject({
+  list: z.string().min(1).describe("The task list to delete: an id (preferred) or a title from list_task_lists. '@default' is rejected: the default list cannot be deleted."),
+});
+
 export type ListTasksArgs = z.output<typeof listTasksArgs>;
 export type TaskRefArgs = z.output<typeof taskRefArgs>;
 export type CreateTaskArgs = z.output<typeof createTaskArgs>;
 export type UpdateTaskArgs = z.output<typeof updateTaskArgs>;
+export type CreateTaskListArgs = z.output<typeof createTaskListArgs>;
+export type RenameTaskListArgs = z.output<typeof renameTaskListArgs>;
+export type DeleteTaskListArgs = z.output<typeof deleteTaskListArgs>;
 
 // ---- shared ----
 
@@ -176,3 +194,15 @@ export const toUpdateTaskInput = (args: UpdateTaskArgs): Result<Targeted<UpdateT
     .map(([title, notes, due]): UpdateTaskChange => ({ taskId: args.taskId, title, notes, due }))
     .andThen(requireChange)
     .map((input) => ({ list: toListTarget(args.list), input }));
+
+// ---- task lists ----
+
+// Titles and the undeletable default list are checked with core's validators before any lookup.
+
+export const toCreateTaskListInput = (args: CreateTaskListArgs): Result<CreateTaskListInput, InvalidInputError> => validateTaskListTitle(args.title).map((title) => ({ title }));
+
+export const toRenameTaskListInput = (args: RenameTaskListArgs): Result<Targeted<RenameTaskListInput>, InvalidInputError> =>
+  validateTaskListTitle(args.title).map((title) => ({ list: toListTarget(args.list), input: { title } }));
+
+// The title or id of the list to delete, still to be resolved.
+export const toDeleteTaskListName = (args: DeleteTaskListArgs): Result<string, InvalidInputError> => validateDeletableTaskListId(args.list);

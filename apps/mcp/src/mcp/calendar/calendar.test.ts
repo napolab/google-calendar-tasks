@@ -46,6 +46,10 @@ const calendarWith = (overrides: Partial<ICalendarService>): ICalendarService =>
 
 const tasks: ITasksService = {
   listTaskLists: unexpected,
+  getTaskList: unexpected,
+  createTaskList: unexpected,
+  renameTaskList: unexpected,
+  deleteTaskList: unexpected,
   listTasks: unexpected,
   getTask: unexpected,
   createTask: unexpected,

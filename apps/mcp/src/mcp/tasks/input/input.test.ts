@@ -1,7 +1,18 @@
 import { InvalidInputError } from '@napolab/gct-core/errors';
 import { describe, expect, it } from 'vitest';
 
-import { toCreateTaskInput, toListTasksQuery, toTaskRef, toUpdateTaskInput } from './index';
+import {
+  createTaskListArgs,
+  deleteTaskListArgs,
+  renameTaskListArgs,
+  toCreateTaskInput,
+  toCreateTaskListInput,
+  toDeleteTaskListName,
+  toListTasksQuery,
+  toRenameTaskListInput,
+  toTaskRef,
+  toUpdateTaskInput,
+} from './index';
 
 import type { CreateTaskArgs, ListTasksArgs, UpdateTaskArgs } from './index';
 
@@ -105,5 +116,45 @@ describe('toUpdateTaskInput', () => {
     [{ taskId: 't1', due: '2026-11-21', clearDue: true }, 'clearDue'],
   ])('rejects an ambiguous or invalid patch (%#)', (args, expected) => {
     expect(messageOf(toUpdateTaskInput(args))).toContain(expected);
+  });
+});
+
+describe('task list arguments', () => {
+  it('require list for rename and delete, and reject unknown keys', () => {
+    expect(renameTaskListArgs.safeParse({ title: 'x' }).success).toBe(false);
+    expect(deleteTaskListArgs.safeParse({}).success).toBe(false);
+    expect(deleteTaskListArgs.safeParse({ list: '' }).success).toBe(false);
+    expect(createTaskListArgs.safeParse({ title: 'x', name: 'y' }).success).toBe(false);
+  });
+});
+
+describe('toCreateTaskListInput', () => {
+  it('passes the title through', () => {
+    expect(toCreateTaskListInput({ title: 'Errands' })._unsafeUnwrap()).toEqual({ title: 'Errands' });
+  });
+
+  it('rejects a blank title', () => {
+    expect(messageOf(toCreateTaskListInput({ title: '\t' }))).toContain('task list title');
+  });
+});
+
+describe('toRenameTaskListInput', () => {
+  it('targets a named list, or the default list for @default', () => {
+    expect(toRenameTaskListInput({ list: 'Work', title: 'Office' })._unsafeUnwrap()).toEqual({ list: { kind: 'named', name: 'Work' }, input: { title: 'Office' } });
+    expect(toRenameTaskListInput({ list: '@default', title: 'Inbox' })._unsafeUnwrap()).toEqual({ list: { kind: 'default' }, input: { title: 'Inbox' } });
+  });
+
+  it('rejects a blank title', () => {
+    expect(messageOf(toRenameTaskListInput({ list: 'Work', title: ' ' }))).toContain('task list title');
+  });
+});
+
+describe('toDeleteTaskListName', () => {
+  it('returns the list title or id to resolve', () => {
+    expect(toDeleteTaskListName({ list: 'Work' })._unsafeUnwrap()).toBe('Work');
+  });
+
+  it('rejects @default', () => {
+    expect(messageOf(toDeleteTaskListName({ list: '@default' }))).toContain('default task list cannot be deleted');
   });
 });

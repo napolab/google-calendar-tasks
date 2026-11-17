@@ -281,7 +281,7 @@ describe('/mcp', () => {
     const response = await mcp(request, { jsonrpc: '2.0', id: 1, method: 'tools/list', params: {} });
 
     expect(response.status).toBe(200);
-    expect((await readRPCBody(response)).result.tools).toHaveLength(14);
+    expect((await readRPCBody(response)).result.tools).toHaveLength(17);
   });
 
   it('tells the LLM to send the user to the connect page (on this host) before Google is connected', async () => {

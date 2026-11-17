@@ -59,6 +59,10 @@ const handlersWith = (overrides: Partial<ITasksService>) => {
     completeTask: record('completeTask', (input: { taskListId?: string }) => okAsync({ ...task(input.taskListId ?? '@default'), status: 'completed' as const, completedAt: 'c' })),
     reopenTask: record('reopenTask', (input: { taskListId?: string }) => okAsync(task(input.taskListId ?? '@default'))),
     deleteTask: record('deleteTask', () => okAsync(undefined)),
+    getTaskList: unexpected,
+    createTaskList: record('createTaskList', (input: { title: string }) => okAsync({ id: 'l-new', title: input.title, updated: 'u' })),
+    renameTaskList: record('renameTaskList', (input: { taskListId: string; title: string }) => okAsync({ id: input.taskListId, title: input.title, updated: 'u' })),
+    deleteTaskList: record('deleteTaskList', () => okAsync(undefined)),
     ...overrides,
   };
   const deps: ToolDeps = { services: { calendar, tasks }, now: () => 0, connectURL: CONNECT_URL };
@@ -150,5 +154,51 @@ describe('tasks tools', () => {
     const { handlers } = handlersWith({ listTaskLists: () => errAsync(new GoogleReconnectRequiredError('expired')) });
 
     expect(errorTextOf(await handlers.listTaskLists())).toContain(CONNECT_URL);
+  });
+
+  it('create_task_list creates the list and returns it with its id', async () => {
+    const { handlers, calls } = handlersWith({});
+
+    expect(jsonOf(await handlers.createTaskList({ title: 'Errands' }))).toEqual({ id: 'l-new', title: 'Errands', updated: 'u' });
+    expect(calls).toEqual([{ method: 'createTaskList', input: { title: 'Errands' } }]);
+  });
+
+  it('rename_task_list resolves the list title to its id, and passes @default through without a lookup', async () => {
+    const { handlers, calls } = handlersWith({});
+
+    expect(jsonOf(await handlers.renameTaskList({ list: 'work', title: 'Office' }))).toEqual({ id: 'l-work', title: 'Office', updated: 'u' });
+    await handlers.renameTaskList({ list: '@default', title: 'Inbox' });
+
+    expect(calls).toEqual([
+      { method: 'renameTaskList', input: { taskListId: 'l-work', title: 'Office' } },
+      { method: 'renameTaskList', input: { taskListId: '@default', title: 'Inbox' } },
+    ]);
+  });
+
+  it('delete_task_list resolves the list and returns which list was deleted', async () => {
+    const { handlers, calls } = handlersWith({});
+
+    expect(jsonOf(await handlers.deleteTaskList({ list: 'Work' }))).toEqual({ deleted: true, taskList: { id: 'l-work', title: 'Work', updated: 'u' } });
+    expect(calls).toEqual([{ method: 'deleteTaskList', input: { taskListId: 'l-work' } }]);
+  });
+
+  it('delete_task_list names the available lists when the list does not exist, and deletes nothing', async () => {
+    const { handlers, calls } = handlersWith({});
+
+    const text = errorTextOf(await handlers.deleteTaskList({ list: 'nope' }));
+
+    expect(text).toContain('"My Tasks", "Work"');
+    expect(calls).toEqual([]);
+  });
+
+  it('rejects a blank title and deleting @default before any Google call', async () => {
+    const { handlers, calls } = handlersWith({ listTaskLists: unexpected });
+
+    expect(errorTextOf(await handlers.createTaskList({ title: ' ' }))).toContain('task list title');
+    expect(errorTextOf(await handlers.renameTaskList({ list: 'Work', title: '' }))).toContain('task list title');
+    expect(errorTextOf(await handlers.deleteTaskList({ list: '@default' }))).toContain('default task list cannot be deleted');
+    // A blank list would otherwise title-match an untitled list.
+    expect(errorTextOf(await handlers.deleteTaskList({ list: ' ' }))).toContain('id or title');
+    expect(calls).toEqual([]);
   });
 });

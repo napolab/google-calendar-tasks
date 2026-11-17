@@ -2,12 +2,39 @@ import { DEFAULT_TASK_LIST_ID, resolveTaskList } from '@napolab/gct-core/tasks';
 import { ResultAsync, okAsync } from 'neverthrow';
 
 import { ok, toToolError } from '../tool-result';
-import { createTaskArgs, listTasksArgs, taskRefArgs, toCreateTaskInput, toListTasksQuery, toTaskRef, toUpdateTaskInput, updateTaskArgs } from './input';
+import {
+  createTaskArgs,
+  createTaskListArgs,
+  deleteTaskListArgs,
+  listTasksArgs,
+  renameTaskListArgs,
+  taskRefArgs,
+  toCreateTaskInput,
+  toCreateTaskListInput,
+  toDeleteTaskListName,
+  toListTasksQuery,
+  toRenameTaskListInput,
+  toTaskRef,
+  toUpdateTaskInput,
+  updateTaskArgs,
+} from './input';
 import { toTaskListView, toTaskPageView, toTaskView } from './view';
 
 import type { ToolDeps } from '../tool-deps';
 import type { ToolError, ToolResult } from '../tool-result';
-import type { CreateTaskArgs, ListTarget, ListTasksArgs, ListTasksOptions, ListTasksQuery, TaskRefArgs, Targeted, UpdateTaskArgs } from './input';
+import type {
+  CreateTaskArgs,
+  CreateTaskListArgs,
+  DeleteTaskListArgs,
+  ListTarget,
+  ListTasksArgs,
+  ListTasksOptions,
+  ListTasksQuery,
+  RenameTaskListArgs,
+  TaskRefArgs,
+  Targeted,
+  UpdateTaskArgs,
+} from './input';
 import type { TaskPageView } from './view';
 import type { McpServer } from '@modelcontextprotocol/server';
 import type { ITasksService, TaskListSummary } from '@napolab/gct-core/tasks';
@@ -15,15 +42,15 @@ import type { ITasksService, TaskListSummary } from '@napolab/gct-core/tasks';
 // Google Tasks tools. Each handler: arguments → core input (./input) → `list` title / id → list id
 // (core resolveTaskList) → service call → normalized view (./view) → ToolResult.
 
+// A title or id → the whole list (for tools that report which list they acted on).
+const resolveNamedTaskList = (tasks: ITasksService, name: string): ResultAsync<TaskListSummary, ToolError> => tasks.listTaskLists().andThen((lists) => resolveTaskList(lists, name));
+
 const resolveListTarget = (tasks: ITasksService, target: ListTarget): ResultAsync<string, ToolError> => {
   switch (target.kind) {
     case 'default':
       return okAsync(DEFAULT_TASK_LIST_ID);
     case 'named':
-      return tasks
-        .listTaskLists()
-        .andThen((lists) => resolveTaskList(lists, target.name))
-        .map((list) => list.id);
+      return resolveNamedTaskList(tasks, target.name).map((list) => list.id);
     default: {
       const _exhaustive: never = target;
       throw new Error(`unhandled list target: ${JSON.stringify(_exhaustive)}`);
@@ -108,6 +135,25 @@ export const createTasksToolHandlers = (deps: ToolDeps) => {
       resolveTargeted(tasks, toTaskRef(args))
         .andThen((ref) => tasks.deleteTask(ref).map(() => ({ deleted: true, taskListId: ref.taskListId, taskId: ref.taskId })))
         .match(ok, fail),
+
+    createTaskList: (args: CreateTaskListArgs): Promise<ToolResult> =>
+      toCreateTaskListInput(args)
+        .asyncAndThen((input) => tasks.createTaskList(input))
+        .map(toTaskListView)
+        .match(ok, fail),
+
+    renameTaskList: (args: RenameTaskListArgs): Promise<ToolResult> =>
+      toRenameTaskListInput(args)
+        .asyncAndThen((targeted) => resolveTargeted(tasks, targeted))
+        .andThen((input) => tasks.renameTaskList(input))
+        .map(toTaskListView)
+        .match(ok, fail),
+
+    deleteTaskList: (args: DeleteTaskListArgs): Promise<ToolResult> =>
+      toDeleteTaskListName(args)
+        .asyncAndThen((name) => resolveNamedTaskList(tasks, name))
+        .andThen((list) => tasks.deleteTaskList({ taskListId: list.id }).map(() => ({ deleted: true, taskList: toTaskListView(list) })))
+        .match(ok, fail),
   };
 };
 
@@ -182,5 +228,40 @@ export const registerTasksTools = (server: McpServer, deps: ToolDeps): void => {
       annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true },
     },
     handlers.deleteTask,
+  );
+
+  server.registerTool(
+    'create_task_list',
+    {
+      title: 'Create task list',
+      description: 'Create a new Google Tasks list. title must be non-empty (at most 1024 characters). Returns the new list with its id, which list / create_task take.',
+      inputSchema: createTaskListArgs,
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
+    },
+    handlers.createTaskList,
+  );
+
+  server.registerTool(
+    'rename_task_list',
+    {
+      title: 'Rename task list',
+      description:
+        "Change a task list's title (its id and tasks stay the same). list is a task list id or title from list_task_lists, or '@default'. title must be non-empty (at most 1024 characters).",
+      inputSchema: renameTaskListArgs,
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
+    },
+    handlers.renameTaskList,
+  );
+
+  server.registerTool(
+    'delete_task_list',
+    {
+      title: 'Delete task list',
+      description:
+        "Delete a whole task list AND EVERY TASK IN IT. Cannot be undone — call list_task_lists first and pass the exact id of the list the user asked to delete (a title also works when it is unique). The default list cannot be deleted ('@default' is rejected). Returns the deleted list.",
+      inputSchema: deleteTaskListArgs,
+      annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true },
+    },
+    handlers.deleteTaskList,
   );
 };

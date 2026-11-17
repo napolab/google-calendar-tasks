@@ -31,6 +31,10 @@ const tasks: ITasksService = {
   completeTask: unexpected,
   reopenTask: unexpected,
   deleteTask: unexpected,
+  getTaskList: unexpected,
+  createTaskList: unexpected,
+  renameTaskList: unexpected,
+  deleteTaskList: unexpected,
 };
 
 const deps: ToolDeps = { services: { calendar, tasks }, now: () => 0, connectURL: 'https://gct.example.com/google/connect' };
@@ -65,7 +69,7 @@ describe('serveMCP', () => {
     const body = await call({ jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} });
 
     expect((body.result.tools ?? []).map((tool) => tool.name).sort()).toEqual([...MCP_TOOL_NAMES].sort());
-    expect(MCP_TOOL_NAMES).toHaveLength(14);
+    expect(MCP_TOOL_NAMES).toHaveLength(17);
   });
 
   it('calls a tool and returns its JSON text', async () => {
