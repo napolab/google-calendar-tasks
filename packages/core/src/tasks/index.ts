@@ -8,6 +8,12 @@ import type { GoogleError } from '../errors';
 import type { GoogleClient, QueryValue } from '../google-client';
 import type { ResultAsync } from 'neverthrow';
 
+// The board-status template (first-line `[status: …]` tag in the notes) and the move that applies it, published
+// through this entry (no separate subpath).
+export { TASK_BOARD_STATUSES, boardStatusOf, parseStatusTag, writeStatusTag } from './status-tag';
+export type { ParsedStatusTag, StatusTaggedTask, TaskBoardStatus } from './status-tag';
+export { setTaskBoardStatus } from './set-board-status';
+
 const BASE_URL = 'https://tasks.googleapis.com/tasks/v1';
 
 // Google's alias for the user's default task list; valid wherever a task list id is.
