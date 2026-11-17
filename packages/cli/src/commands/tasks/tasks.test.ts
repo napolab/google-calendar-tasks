@@ -2,7 +2,7 @@ import { GoogleNotFoundError } from '@napolab/gct-core/errors';
 import { errAsync, okAsync } from 'neverthrow';
 import { describe, expect, it } from 'vitest';
 
-import { fakeContext, fakeServices } from '../../test-support';
+import { fakeContext, fakeServices, knownTaskLists } from '../../test-support';
 
 import { runAddTask, runCompleteTask, runDeleteTask, runListTasks, runReopenTask, runUpdateTask } from './index';
 
@@ -32,7 +32,7 @@ const LISTS: readonly TaskListSummary[] = [
   { id: 'MDI', title: '日常タスク', updated: '2026-11-16T01:00:00.000Z' },
 ];
 
-const listTaskLists = () => okAsync(LISTS);
+const lookups = knownTaskLists(LISTS);
 
 const DEFAULTS = { completed: 'include', max: 100 } as const;
 
@@ -40,7 +40,7 @@ describe('runListTasks', () => {
   it('lists every task list by default, grouped by list title', async () => {
     const calls: ListTasksInput[] = [];
     const listTasks = (input: ListTasksInput) => (calls.push(input), okAsync({ items: input.taskListId === 'MDI' ? [OPEN] : [], next: { kind: 'last' } as const }));
-    const ctx = fakeContext({ services: fakeServices({ tasks: { listTaskLists, listTasks } }) });
+    const ctx = fakeContext({ services: fakeServices({ tasks: { ...lookups, listTasks } }) });
     await runListTasks(ctx, DEFAULTS, []);
     expect(calls).toEqual([
       {
@@ -70,7 +70,7 @@ describe('runListTasks', () => {
   });
 
   it('prints every list as JSON, empty ones included', async () => {
-    const ctx = fakeContext({ services: fakeServices({ tasks: { listTaskLists, listTasks: (input) => okAsync({ items: input.taskListId === 'MDI' ? [OPEN] : [], next: { kind: 'last' } }) } }) });
+    const ctx = fakeContext({ services: fakeServices({ tasks: { ...lookups, listTasks: (input) => okAsync({ items: input.taskListId === 'MDI' ? [OPEN] : [], next: { kind: 'last' } }) } }) });
     await runListTasks(ctx, { ...DEFAULTS, json: true }, []);
     expect(JSON.parse(ctx.output.stdout.join('\n'))).toEqual([
       { taskList: LISTS[0], tasks: [], nextPage: { kind: 'last' } },
@@ -86,7 +86,7 @@ describe('runListTasks', () => {
 
   it('lists one list named by its title', async () => {
     const calls: ListTasksInput[] = [];
-    const ctx = fakeContext({ services: fakeServices({ tasks: { listTaskLists, listTasks: (input) => (calls.push(input), okAsync({ items: [OPEN], next: { kind: 'more', pageToken: 'tok' } })) } }) });
+    const ctx = fakeContext({ services: fakeServices({ tasks: { ...lookups, listTasks: (input) => (calls.push(input), okAsync({ items: [OPEN], next: { kind: 'more', pageToken: 'tok' } })) } }) });
     await runListTasks(ctx, { ...DEFAULTS, list: '日常タスク', pageToken: 'p2' }, []);
     expect(calls).toEqual([
       {
@@ -105,7 +105,7 @@ describe('runListTasks', () => {
   });
 
   it('prints one list as the bare task page JSON', async () => {
-    const ctx = fakeContext({ services: fakeServices({ tasks: { listTaskLists, listTasks: () => okAsync({ items: [OPEN], next: { kind: 'last' } }) } }) });
+    const ctx = fakeContext({ services: fakeServices({ tasks: { ...lookups, listTasks: () => okAsync({ items: [OPEN], next: { kind: 'last' } }) } }) });
     await runListTasks(ctx, { ...DEFAULTS, list: 'MDE', json: true }, []);
     expect(JSON.parse(ctx.output.stdout.join('\n'))).toEqual({ items: [OPEN], next: { kind: 'last' } });
   });
@@ -119,7 +119,7 @@ describe('runListTasks', () => {
   });
 
   it('fails for an unknown --list, listing the titles and pointing at gct tasklists', async () => {
-    const ctx = fakeContext({ services: fakeServices({ tasks: { listTaskLists } }) });
+    const ctx = fakeContext({ services: fakeServices({ tasks: { ...lookups } }) });
     await runListTasks(ctx, { ...DEFAULTS, list: 'nope' }, []);
     const stderr = ctx.output.stderr.join('\n');
     expect(stderr).toContain('TaskListNotFoundError');
@@ -154,7 +154,7 @@ describe('runAddTask', () => {
 
   it('adds to a list named by its title', async () => {
     const calls: CreateTaskInput[] = [];
-    const ctx = fakeContext({ services: fakeServices({ tasks: { listTaskLists, createTask: (input) => (calls.push(input), okAsync(OPEN)) } }) });
+    const ctx = fakeContext({ services: fakeServices({ tasks: { ...lookups, createTask: (input) => (calls.push(input), okAsync(OPEN)) } }) });
     await runAddTask(ctx, { title: 'Buy milk', list: '日常タスク' }, []);
     expect(calls[0]?.taskListId).toBe('MDI');
   });
@@ -180,7 +180,7 @@ describe('runUpdateTask', () => {
 
   it('updates in a list named by its title', async () => {
     const calls: UpdateTaskInput[] = [];
-    const ctx = fakeContext({ services: fakeServices({ tasks: { listTaskLists, updateTask: (input) => (calls.push(input), okAsync(OPEN)) } }) });
+    const ctx = fakeContext({ services: fakeServices({ tasks: { ...lookups, updateTask: (input) => (calls.push(input), okAsync(OPEN)) } }) });
     await runUpdateTask(ctx, { taskId: 't1', title: 'Buy milk', list: 'マイタスク' }, []);
     expect(calls[0]?.taskListId).toBe('MDE');
   });
@@ -189,7 +189,7 @@ describe('runUpdateTask', () => {
 describe('runCompleteTask / runReopenTask / runDeleteTask', () => {
   it('completes a task in a list named by its title', async () => {
     const refs: TaskRef[] = [];
-    const ctx = fakeContext({ services: fakeServices({ tasks: { listTaskLists, completeTask: (ref) => (refs.push(ref), okAsync(DONE)) } }) });
+    const ctx = fakeContext({ services: fakeServices({ tasks: { ...lookups, completeTask: (ref) => (refs.push(ref), okAsync(DONE)) } }) });
     await runCompleteTask(ctx, { taskId: 't1', list: '日常タスク' }, []);
     expect(refs).toEqual([{ taskListId: 'MDI', taskId: 't1' }]);
     expect(ctx.output.stdout).toEqual(['Completed: [x] Buy milk  [t1]']);
@@ -197,7 +197,7 @@ describe('runCompleteTask / runReopenTask / runDeleteTask', () => {
 
   it('reopens a task', async () => {
     const refs: TaskRef[] = [];
-    const ctx = fakeContext({ services: fakeServices({ tasks: { listTaskLists, reopenTask: (ref) => (refs.push(ref), okAsync(OPEN)) } }) });
+    const ctx = fakeContext({ services: fakeServices({ tasks: { ...lookups, reopenTask: (ref) => (refs.push(ref), okAsync(OPEN)) } }) });
     await runReopenTask(ctx, { taskId: 't1', list: 'MDE' }, []);
     expect(refs).toEqual([{ taskListId: 'MDE', taskId: 't1' }]);
     expect(ctx.output.stdout).toEqual(['Reopened: [ ] Buy milk  [t1]']);
@@ -205,15 +205,15 @@ describe('runCompleteTask / runReopenTask / runDeleteTask', () => {
 
   it('deletes from a list named by its title and confirms with its id', async () => {
     const refs: TaskRef[] = [];
-    const ctx = fakeContext({ services: fakeServices({ tasks: { listTaskLists, deleteTask: (ref) => (refs.push(ref), okAsync(undefined)) } }) });
+    const ctx = fakeContext({ services: fakeServices({ tasks: { ...lookups, deleteTask: (ref) => (refs.push(ref), okAsync(undefined)) } }) });
     await runDeleteTask(ctx, { taskId: 't1', list: '日常タスク' }, []);
     expect(refs).toEqual([{ taskListId: 'MDI', taskId: 't1' }]);
     expect(ctx.output.stdout).toEqual(['Deleted task t1 from list MDI.']);
   });
 
   it('fails with the ambiguity and the candidate ids when titles collide', async () => {
-    const twins = () => okAsync([...LISTS, { id: 'MDX', title: '日常タスク', updated: '2026-11-15T01:00:00.000Z' }]);
-    const ctx = fakeContext({ services: fakeServices({ tasks: { listTaskLists: twins } }) });
+    const twins = knownTaskLists([...LISTS, { id: 'MDX', title: '日常タスク', updated: '2026-11-15T01:00:00.000Z' }]);
+    const ctx = fakeContext({ services: fakeServices({ tasks: { ...twins } }) });
     await runCompleteTask(ctx, { taskId: 't1', list: '日常タスク' }, []);
     const stderr = ctx.output.stderr.join('\n');
     expect(stderr).toContain('AmbiguousTaskListError');

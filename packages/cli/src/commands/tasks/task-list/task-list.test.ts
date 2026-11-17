@@ -1,4 +1,4 @@
-import { AmbiguousTaskListError, GoogleNetworkError, TaskListNotFoundError } from '@napolab/gct-core/errors';
+import { AmbiguousTaskListError, GoogleAPIError, GoogleNetworkError, TaskListNotFoundError } from '@napolab/gct-core/errors';
 import { errAsync, okAsync } from 'neverthrow';
 import { describe, expect, it } from 'vitest';
 
@@ -13,7 +13,27 @@ const LISTS: readonly TaskListSummary[] = [
   { id: 'MDI', title: '日常タスク', updated: '2026-11-16T01:00:00.000Z' },
 ];
 
-const withLists = () => fakeServices({ tasks: { listTaskLists: () => okAsync(LISTS) } }).tasks;
+// A fake Google Tasks that knows LISTS: GET by id answers only real ids (400 "Invalid task list ID" otherwise, as
+// Google does for a title). Records every lookup call.
+const withListsOf = (lists: readonly TaskListSummary[]) => {
+  const calls: string[] = [];
+  const tasks = fakeServices({
+    tasks: {
+      getTaskList: ({ taskListId }) => {
+        calls.push(`getTaskList ${taskListId}`);
+        const list = lists.find((candidate) => candidate.id === taskListId);
+        return list === undefined ? errAsync(new GoogleAPIError('Google API 400: Invalid task list ID', 400)) : okAsync(list);
+      },
+      listTaskLists: () => {
+        calls.push('listTaskLists');
+        return okAsync(lists);
+      },
+    },
+  }).tasks;
+  return { tasks, calls };
+};
+
+const withLists = () => withListsOf(LISTS).tasks;
 
 describe('resolveListTarget', () => {
   it('passes the default list through as @default without looking up the lists', async () => {
@@ -22,12 +42,16 @@ describe('resolveListTarget', () => {
     expect((await resolveListTarget(tasks, { kind: 'default' }))._unsafeUnwrap()).toBe('@default');
   });
 
-  it('resolves a title to its list id', async () => {
-    expect((await resolveListTarget(withLists(), { kind: 'named', name: '日常タスク' }))._unsafeUnwrap()).toBe('MDI');
+  it('resolves a title to its list id, falling back to listing every list when it is not an id', async () => {
+    const { tasks, calls } = withListsOf(LISTS);
+    expect((await resolveListTarget(tasks, { kind: 'named', name: '日常タスク' }))._unsafeUnwrap()).toBe('MDI');
+    expect(calls).toEqual(['getTaskList 日常タスク', 'listTaskLists']);
   });
 
-  it('resolves an id to itself', async () => {
-    expect((await resolveListTarget(withLists(), { kind: 'named', name: 'MDE' }))._unsafeUnwrap()).toBe('MDE');
+  it('resolves an id with exactly one lookup by id (no listing)', async () => {
+    const { tasks, calls } = withListsOf(LISTS);
+    expect((await resolveListTarget(tasks, { kind: 'named', name: 'MDE' }))._unsafeUnwrap()).toBe('MDE');
+    expect(calls).toEqual(['getTaskList MDE']);
   });
 
   it('fails with TaskListNotFoundError listing the titles', async () => {
@@ -37,12 +61,12 @@ describe('resolveListTarget', () => {
   });
 
   it('fails with AmbiguousTaskListError when titles collide', async () => {
-    const tasks = fakeServices({ tasks: { listTaskLists: () => okAsync([...LISTS, { id: 'MDX', title: '日常タスク', updated: '2026-11-15T01:00:00.000Z' }]) } }).tasks;
+    const { tasks } = withListsOf([...LISTS, { id: 'MDX', title: '日常タスク', updated: '2026-11-15T01:00:00.000Z' }]);
     expect((await resolveListTarget(tasks, { kind: 'named', name: '日常タスク' }))._unsafeUnwrapErr()).toBeInstanceOf(AmbiguousTaskListError);
   });
 
   it('propagates the Google error of the lookup', async () => {
-    const tasks = fakeServices({ tasks: { listTaskLists: () => errAsync(new GoogleNetworkError('offline')) } }).tasks;
+    const tasks = fakeServices({ tasks: { getTaskList: () => errAsync(new GoogleNetworkError('offline')) } }).tasks;
     expect((await resolveListTarget(tasks, { kind: 'named', name: '日常タスク' }))._unsafeUnwrapErr()).toBeInstanceOf(GoogleNetworkError);
   });
 });

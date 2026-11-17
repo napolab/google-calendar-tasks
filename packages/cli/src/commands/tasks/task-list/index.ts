@@ -1,4 +1,4 @@
-import { DEFAULT_TASK_LIST_ID, resolveTaskList } from '@napolab/gct-core/tasks';
+import { DEFAULT_TASK_LIST_ID, findTaskList } from '@napolab/gct-core/tasks';
 import { okAsync } from 'neverthrow';
 
 import type { ListTarget, Targeted } from '../input';
@@ -6,13 +6,13 @@ import type { AmbiguousTaskListError, GoogleError, TaskListNotFoundError } from 
 import type { ITasksService, TaskListSummary } from '@napolab/gct-core/tasks';
 import type { ResultAsync } from 'neverthrow';
 
-// `--list <title or id>` → the task list id core takes. The default list needs no lookup; a name is matched
-// against the user's lists by core's resolveTaskList (exact id first, then title).
+// `--list <title or id>` → the task list id core takes. The default list needs no lookup; a name is read by id
+// first (one GET) and only matched against every list's title when it is not an id (core findTaskList).
 
 export type ResolveListError = GoogleError | TaskListNotFoundError | AmbiguousTaskListError;
 
 // A title or id → the whole list (for commands that print which list they acted on).
-export const resolveNamedTaskList = (tasks: ITasksService, name: string): ResultAsync<TaskListSummary, ResolveListError> => tasks.listTaskLists().andThen((lists) => resolveTaskList(lists, name));
+export const resolveNamedTaskList = (tasks: ITasksService, name: string): ResultAsync<TaskListSummary, ResolveListError> => findTaskList(tasks, name);
 
 export const resolveListTarget = (tasks: ITasksService, target: ListTarget): ResultAsync<string, ResolveListError> => {
   switch (target.kind) {

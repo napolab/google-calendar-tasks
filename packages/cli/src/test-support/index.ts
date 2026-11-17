@@ -6,7 +6,7 @@ import { LoopbackServerError, NotLoggedInError } from '../context/errors';
 import type { CliContext, IAuthService, Output } from '../context';
 import type { ICalendarService } from '@napolab/gct-core/calendar';
 import type { Services } from '@napolab/gct-core/services';
-import type { ITasksService } from '@napolab/gct-core/tasks';
+import type { ITasksService, TaskListSummary } from '@napolab/gct-core/tasks';
 import type { ResultAsync } from 'neverthrow';
 
 // Test doubles for CliContext members. Never imported by production code.
@@ -87,6 +87,16 @@ const unusedTasks: ITasksService = {
 export const fakeServices = (overrides: { readonly calendar?: Partial<ICalendarService>; readonly tasks?: Partial<ITasksService> }): Services => ({
   calendar: { ...unusedCalendar, ...overrides.calendar },
   tasks: { ...unusedTasks, ...overrides.tasks },
+});
+
+// Google Tasks' two task list lookups over a fixed set of lists: GET by id answers only their ids (otherwise 400
+// "Invalid task list ID", as Google does for a title), tasklists.list returns them all. Spread into fakeServices({ tasks: { ...knownTaskLists(LISTS) } }).
+export const knownTaskLists = (lists: readonly TaskListSummary[]): Pick<ITasksService, 'getTaskList' | 'listTaskLists'> => ({
+  getTaskList: ({ taskListId }) => {
+    const list = lists.find((candidate) => candidate.id === taskListId);
+    return list === undefined ? errAsync(new GoogleAPIError('Google API 400: Invalid task list ID', 400)) : okAsync(list);
+  },
+  listTaskLists: () => okAsync(lists),
 });
 
 const notLoggedIn = () => errAsync(new NotLoggedInError('Not logged in to Google yet.'));

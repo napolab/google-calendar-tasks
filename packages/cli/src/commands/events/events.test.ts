@@ -28,6 +28,7 @@ const EVENT: ActiveEvent = {
   guests: { canModify: false, canInviteOthers: true, canSeeOtherGuests: true },
   conference: { kind: 'none' },
   hangoutLink: '',
+  iCalUID: 'e1@google.com',
   created: '2026-11-01T00:00:00Z',
   updated: '2026-11-02T00:00:00Z',
 };
