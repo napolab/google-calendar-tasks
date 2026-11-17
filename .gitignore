@@ -32,3 +32,6 @@ tsconfig.tsbuildinfo
 
 # Reference repositories (local only, imported by CLAUDE.md)
 docs/ref.md
+
+# cf build output and generated types
+.cloudflare/

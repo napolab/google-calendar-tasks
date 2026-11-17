@@ -1,0 +1,31 @@
+{
+  "name": "@napolab/gct-mcp",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "cf dev",
+    "build": "cf build --mode staging",
+    "deploy:staging": "cf deploy --mode staging",
+    "cf:types": "cf workers types --mode staging",
+    "fmt": "oxfmt --write . && oxlint --fix .",
+    "lint": "oxfmt --check . && oxlint .",
+    "typecheck": "tsgo --noEmit -p tsconfig.json",
+    "test": "vitest run --typecheck --passWithNoTests"
+  },
+  "dependencies": {
+    "hono": "^4.13.19",
+    "jose": "^6.2.17",
+    "neverthrow": "^8.2.0"
+  },
+  "devDependencies": {
+    "@cloudflare/vite-plugin": "2.0.0-rc.0",
+    "@typescript/native-preview": "7.0.0-dev.20260707.2",
+    "cf": "1.0.0-rc.0",
+    "oxfmt": "^0.79.0",
+    "oxlint": "^1.94.0",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.8",
+    "vitest": "^5.1.0"
+  }
+}
