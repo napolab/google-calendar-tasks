@@ -19,6 +19,10 @@ const OPEN: OpenTask = {
   position: '00000000000000000001',
   updated: '2026-11-17T01:00:00.000Z',
   webViewLink: 'https://tasks.google.com/task/t1',
+  links: [],
+  assignment: { kind: 'none' },
+  deleted: false,
+  hidden: false,
 };
 
 const DONE: CompletedTask = { ...OPEN, status: 'completed', completedAt: '2026-11-17T03:00:00.000Z' };
@@ -39,8 +43,28 @@ describe('runListTasks', () => {
     const ctx = fakeContext({ services: fakeServices({ tasks: { listTaskLists, listTasks } }) });
     await runListTasks(ctx, DEFAULTS, []);
     expect(calls).toEqual([
-      { taskListId: 'MDE', due: { kind: 'any' }, completed: 'include', page: { kind: 'first' }, maxResults: 100 },
-      { taskListId: 'MDI', due: { kind: 'any' }, completed: 'include', page: { kind: 'first' }, maxResults: 100 },
+      {
+        taskListId: 'MDE',
+        due: { kind: 'any' },
+        completed: 'include',
+        completedAt: { kind: 'any' },
+        updated: { kind: 'any' },
+        deleted: 'exclude',
+        assigned: 'exclude',
+        page: { kind: 'first' },
+        maxResults: 100,
+      },
+      {
+        taskListId: 'MDI',
+        due: { kind: 'any' },
+        completed: 'include',
+        completedAt: { kind: 'any' },
+        updated: { kind: 'any' },
+        deleted: 'exclude',
+        assigned: 'exclude',
+        page: { kind: 'first' },
+        maxResults: 100,
+      },
     ]);
     expect(ctx.output.stdout).toEqual(['# 日常タスク\n[ ] Buy milk  [t1]']);
   });
@@ -64,7 +88,19 @@ describe('runListTasks', () => {
     const calls: ListTasksInput[] = [];
     const ctx = fakeContext({ services: fakeServices({ tasks: { listTaskLists, listTasks: (input) => (calls.push(input), okAsync({ items: [OPEN], next: { kind: 'more', pageToken: 'tok' } })) } }) });
     await runListTasks(ctx, { ...DEFAULTS, list: '日常タスク', pageToken: 'p2' }, []);
-    expect(calls).toEqual([{ taskListId: 'MDI', due: { kind: 'any' }, completed: 'include', page: { kind: 'token', pageToken: 'p2' }, maxResults: 100 }]);
+    expect(calls).toEqual([
+      {
+        taskListId: 'MDI',
+        due: { kind: 'any' },
+        completed: 'include',
+        completedAt: { kind: 'any' },
+        updated: { kind: 'any' },
+        deleted: 'exclude',
+        assigned: 'exclude',
+        page: { kind: 'token', pageToken: 'p2' },
+        maxResults: 100,
+      },
+    ]);
     expect(ctx.output.stdout).toEqual(['[ ] Buy milk  [t1]\nMore tasks: --page-token tok']);
   });
 

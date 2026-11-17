@@ -43,6 +43,27 @@ const unusedCalendar: ICalendarService = {
   updateEvent: unexpected,
   deleteEvent: unexpected,
   queryFreeBusy: unexpected,
+  listEventInstances: unexpected,
+  moveEvent: unexpected,
+  quickAddEvent: unexpected,
+  importEvent: unexpected,
+  getCalendar: unexpected,
+  createCalendar: unexpected,
+  updateCalendar: unexpected,
+  deleteCalendar: unexpected,
+  clearPrimaryCalendar: unexpected,
+  getCalendarListEntry: unexpected,
+  subscribeCalendar: unexpected,
+  updateCalendarListEntry: unexpected,
+  unsubscribeCalendar: unexpected,
+  listCalendarAcl: unexpected,
+  getCalendarAclRule: unexpected,
+  insertCalendarAclRule: unexpected,
+  updateCalendarAclRule: unexpected,
+  deleteCalendarAclRule: unexpected,
+  getColors: unexpected,
+  listSettings: unexpected,
+  getSetting: unexpected,
 };
 
 const unusedTasks: ITasksService = {
@@ -58,6 +79,8 @@ const unusedTasks: ITasksService = {
   completeTask: unexpected,
   reopenTask: unexpected,
   deleteTask: unexpected,
+  moveTask: unexpected,
+  clearCompletedTasks: unexpected,
 };
 
 // Every method not overridden fails the call, so a test notices an unexpected request.

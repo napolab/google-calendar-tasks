@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest';
 import { toCreateTaskInput, toListTasksQuery, toTaskRef, toUpdateTaskInput } from './index';
 
 describe('toListTasksQuery', () => {
-  const OPTIONS = { due: { kind: 'any' }, completed: 'include', maxResults: 100 };
+  const OPTIONS = { due: { kind: 'any' }, completed: 'include', completedAt: { kind: 'any' }, updated: { kind: 'any' }, deleted: 'exclude', assigned: 'exclude', maxResults: 100 };
 
   it('lists every task list by default, with any due date', () => {
     expect(toListTasksQuery({ completed: 'include', max: 100 })._unsafeUnwrap()).toEqual({ kind: 'all', options: OPTIONS });
@@ -29,7 +29,7 @@ describe('toListTasksQuery', () => {
       kind: 'one',
       list: { kind: 'named', name: '日常タスク' },
       page: { kind: 'token', pageToken: 'tok' },
-      options: { due: { kind: 'any' }, completed: 'exclude', maxResults: 20 },
+      options: { due: { kind: 'any' }, completed: 'exclude', completedAt: { kind: 'any' }, updated: { kind: 'any' }, deleted: 'exclude', assigned: 'exclude', maxResults: 20 },
     });
   });
 

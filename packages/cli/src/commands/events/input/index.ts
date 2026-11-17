@@ -7,7 +7,7 @@ import { jsonArg } from '../../shared/flags/json';
 import { toListPatch, toTextPatch } from '../../shared/flags/patch';
 
 import type { WindowBound } from '../../shared/flags/date';
-import type { CreateEventInput, EventRef, EventTime, FieldPatch, ListEventsInput, TimePatch, TimeWindow, TimeZoneRef, UpdateEventInput } from '@napolab/gct-core/calendar';
+import type { AttendeeInput, CreateEventInput, EventRef, EventTime, FieldPatch, ListEventsInput, TimePatch, TimeWindow, TimeZoneRef, UpdateEventInput } from '@napolab/gct-core/calendar';
 import type { ArgValues, Args } from 'gunshi';
 import type { Result } from 'neverthrow';
 
@@ -206,6 +206,22 @@ const toEventRange = (flags: TimeFlags): Result<EventRange, InvalidInputError> =
 
 // ---- create ----
 
+// The CLI exposes no flags for the richer event fields: they keep Google's defaults, and the CLI never emails guests.
+const CREATE_DEFAULTS = {
+  recurrence: [],
+  reminders: { kind: 'default' },
+  color: { kind: 'calendar' },
+  visibility: 'default',
+  transparency: 'opaque',
+  guests: { canModify: false, canInviteOthers: true, canSeeOtherGuests: true },
+  conference: { kind: 'none' },
+  eventType: { kind: 'default' },
+  sendUpdates: 'none',
+} as const satisfies Omit<CreateEventInput, keyof EventRange | 'calendarId' | 'summary' | 'description' | 'location' | 'attendees'>;
+
+// --attendee invites a required guest.
+const toAttendees = (emails: readonly string[]): readonly AttendeeInput[] => emails.map((email) => ({ email, optional: false }));
+
 export const toCreateEventInput = (flags: CreateEventFlags): Result<CreateEventInput, InvalidInputError> =>
   toEventRange(flags).map((range) => ({
     ...calendarOf(flags.calendar),
@@ -213,7 +229,8 @@ export const toCreateEventInput = (flags: CreateEventFlags): Result<CreateEventI
     description: flags.description ?? '',
     location: flags.location ?? '',
     ...range,
-    attendees: flags.attendee ?? [],
+    attendees: toAttendees(flags.attendee ?? []),
+    ...CREATE_DEFAULTS,
   }));
 
 // ---- update ----
@@ -222,6 +239,35 @@ const toSummaryPatch = (summary: string | undefined): Result<FieldPatch<string>,
   if (summary === undefined) return ok({ kind: 'keep' });
   if (summary === '') return err(new InvalidInputError('--summary is empty. Pass a non-empty title, or leave --summary out to keep the current one.'));
   return ok({ kind: 'set', value: summary });
+};
+
+// Fields the CLI cannot change are kept; updates never email guests.
+const UPDATE_KEEPS = {
+  recurrence: { kind: 'keep' },
+  reminders: { kind: 'keep' },
+  color: { kind: 'keep' },
+  visibility: { kind: 'keep' },
+  transparency: { kind: 'keep' },
+  guestsCanModify: { kind: 'keep' },
+  guestsCanInviteOthers: { kind: 'keep' },
+  guestsCanSeeOtherGuests: { kind: 'keep' },
+  conference: { kind: 'keep' },
+  statusProperties: { kind: 'keep' },
+  sendUpdates: 'none',
+} as const satisfies Partial<UpdateEventInput>;
+
+const toAttendeesPatch = (patch: FieldPatch<readonly string[]>): FieldPatch<readonly AttendeeInput[]> => {
+  switch (patch.kind) {
+    case 'keep':
+    case 'clear':
+      return patch;
+    case 'set':
+      return { kind: 'set', value: toAttendees(patch.value) };
+    default: {
+      const _exhaustive: never = patch;
+      throw new Error(`unhandled patch: ${JSON.stringify(_exhaustive)}`);
+    }
+  }
 };
 
 const UPDATE_FLAGS = '--summary, --description / --clear-description, --location / --clear-location, --attendee / --clear-attendees, or the time flags (--date / --start / --end)';
@@ -238,7 +284,7 @@ export const toUpdateEventInput = (eventId: string, flags: UpdateEventFlags): Re
       toTextPatch('location', flags.location, flags.clearLocation).andThen((location) =>
         toListPatch({ set: 'attendee', clear: 'attendees' }, flags.attendee, flags.clearAttendees).andThen((attendees) =>
           toTimePatch(flags)
-            .map((time): UpdateEventInput => ({ ...calendarOf(flags.calendar), eventId, summary, description, location, attendees, time }))
+            .map((time): UpdateEventInput => ({ ...calendarOf(flags.calendar), eventId, summary, description, location, attendees: toAttendeesPatch(attendees), time, ...UPDATE_KEEPS }))
             .andThen(requireChange),
         ),
       ),

@@ -14,7 +14,15 @@ const LISTS: readonly TaskListSummary[] = [
   { id: 'MDI', title: '日常タスク', updated: '2026-11-16T01:00:00.000Z' },
 ];
 
-const OPTIONS: ListTasksOptions = { due: { kind: 'from', dueMin: '2026-11-17' }, completed: 'exclude', maxResults: 3 };
+const OPTIONS: ListTasksOptions = {
+  due: { kind: 'from', dueMin: '2026-11-17' },
+  completed: 'exclude',
+  completedAt: { kind: 'any' },
+  updated: { kind: 'any' },
+  deleted: 'exclude',
+  assigned: 'exclude',
+  maxResults: 3,
+};
 
 const taskIn = (taskListId: string): OpenTask => ({
   status: 'needsAction',
@@ -27,6 +35,10 @@ const taskIn = (taskListId: string): OpenTask => ({
   position: '00000000000000000001',
   updated: '2026-11-17T01:00:00.000Z',
   webViewLink: 'https://tasks.google.com/task/t1',
+  links: [],
+  assignment: { kind: 'none' },
+  deleted: false,
+  hidden: false,
 });
 
 describe('listTasksInAllLists', () => {

@@ -56,7 +56,7 @@ export const runDeleteEvent = (ctx: CliContext, values: ArgValues<typeof eventRe
   const ref = toEventRef(values.eventId, values);
   return report(
     ctx.output,
-    rejectExtraArgs(extra).asyncAndThen(() => ctx.services().andThen((services) => services.calendar.deleteEvent(ref).map(() => toDeleted(ref)))),
+    rejectExtraArgs(extra).asyncAndThen(() => ctx.services().andThen((services) => services.calendar.deleteEvent({ ...ref, sendUpdates: 'none' }).map(() => toDeleted(ref)))),
     renderWith(values.json, formatDeleted),
   );
 };

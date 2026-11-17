@@ -6,7 +6,7 @@ import { fakeContext, fakeServices } from '../../test-support';
 
 import { runCreateEvent, runDeleteEvent, runGetEvent, runListEvents, runUpdateEvent } from './index';
 
-import type { ActiveEvent, CreateEventInput, EventPage, EventRef, ListEventsInput, UpdateEventInput } from '@napolab/gct-core/calendar';
+import type { ActiveEvent, CreateEventInput, DeleteEventInput, EventPage, EventRef, ListEventsInput, UpdateEventInput } from '@napolab/gct-core/calendar';
 
 const EVENT: ActiveEvent = {
   status: 'confirmed',
@@ -20,6 +20,14 @@ const EVENT: ActiveEvent = {
   htmlLink: 'https://calendar.google.com/event?eid=1',
   attendees: [],
   recurrence: { kind: 'single' },
+  eventType: { kind: 'default' },
+  reminders: { kind: 'default' },
+  color: { kind: 'calendar' },
+  visibility: 'default',
+  transparency: 'opaque',
+  guests: { canModify: false, canInviteOthers: true, canSeeOtherGuests: true },
+  conference: { kind: 'none' },
+  hangoutLink: '',
   created: '2026-11-01T00:00:00Z',
   updated: '2026-11-02T00:00:00Z',
 };
@@ -107,10 +115,10 @@ describe('runUpdateEvent', () => {
 
 describe('runDeleteEvent', () => {
   it('deletes and confirms', async () => {
-    const refs: EventRef[] = [];
+    const refs: DeleteEventInput[] = [];
     const ctx = fakeContext({ services: fakeServices({ calendar: { deleteEvent: (ref) => (refs.push(ref), okAsync(undefined)) } }) });
     await runDeleteEvent(ctx, { eventId: 'ev1', calendar: 'c1' }, []);
-    expect(refs).toEqual([{ calendarId: 'c1', eventId: 'ev1' }]);
+    expect(refs).toEqual([{ calendarId: 'c1', eventId: 'ev1', sendUpdates: 'none' }]);
     expect(ctx.output.stdout).toEqual(['Deleted event ev1 from calendar c1.']);
   });
 

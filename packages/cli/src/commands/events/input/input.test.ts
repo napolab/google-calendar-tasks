@@ -6,6 +6,33 @@ import { toCreateEventInput, toEventRef, toListEventsInput, toUpdateEventInput }
 // 2026-11-17 10:00 in Asia/Tokyo.
 const NOW = Date.UTC(2026, 10, 17, 1, 0, 0);
 
+// The richer core fields the CLI does not expose: Google's defaults, and never an email notification.
+const CREATE_DEFAULTS = {
+  recurrence: [],
+  reminders: { kind: 'default' },
+  color: { kind: 'calendar' },
+  visibility: 'default',
+  transparency: 'opaque',
+  guests: { canModify: false, canInviteOthers: true, canSeeOtherGuests: true },
+  conference: { kind: 'none' },
+  eventType: { kind: 'default' },
+  sendUpdates: 'none',
+} as const;
+
+const UPDATE_KEEPS = {
+  recurrence: { kind: 'keep' },
+  reminders: { kind: 'keep' },
+  color: { kind: 'keep' },
+  visibility: { kind: 'keep' },
+  transparency: { kind: 'keep' },
+  guestsCanModify: { kind: 'keep' },
+  guestsCanInviteOthers: { kind: 'keep' },
+  guestsCanSeeOtherGuests: { kind: 'keep' },
+  conference: { kind: 'keep' },
+  statusProperties: { kind: 'keep' },
+  sendUpdates: 'none',
+} as const;
+
 describe('toListEventsInput', () => {
   it('defaults to the next 7 days from now in Asia/Tokyo, the first page, no search', () => {
     expect(toListEventsInput({ max: 50 }, NOW)._unsafeUnwrap()).toEqual({
@@ -64,6 +91,7 @@ describe('toCreateEventInput', () => {
       start: { kind: 'date', date: '2026-11-23' },
       end: { kind: 'date', date: '2026-11-24' },
       attendees: [],
+      ...CREATE_DEFAULTS,
     });
   });
 
@@ -98,7 +126,11 @@ describe('toCreateEventInput', () => {
       location: 'Room 1',
       start: { kind: 'dateTime', dateTime: '2026-11-17T10:00:00+09:00', timeZone: { kind: 'iana', name: 'Asia/Tokyo' } },
       end: { kind: 'dateTime', dateTime: '2026-11-17T11:00:00+09:00', timeZone: { kind: 'iana', name: 'Asia/Tokyo' } },
-      attendees: ['a@example.com', 'b@example.com'],
+      attendees: [
+        { email: 'a@example.com', optional: false },
+        { email: 'b@example.com', optional: false },
+      ],
+      ...CREATE_DEFAULTS,
     });
   });
 
@@ -139,8 +171,9 @@ describe('toUpdateEventInput', () => {
       summary: { kind: 'set', value: 'New' },
       description: { kind: 'clear' },
       location: { kind: 'keep' },
-      attendees: { kind: 'set', value: ['a@example.com'] },
+      attendees: { kind: 'set', value: [{ email: 'a@example.com', optional: false }] },
       time: { kind: 'keep' },
+      ...UPDATE_KEEPS,
     });
   });
 

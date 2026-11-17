@@ -16,6 +16,10 @@ const OPEN: OpenTask = {
   position: '00000000000000000001',
   updated: '2026-11-17T01:00:00.000Z',
   webViewLink: 'https://tasks.google.com/task/t1',
+  links: [],
+  assignment: { kind: 'none' },
+  deleted: false,
+  hidden: false,
 };
 
 const DONE: CompletedTask = { ...OPEN, id: 't2', status: 'completed', completedAt: '2026-11-17T03:00:00.000Z', due: { kind: 'none' }, hierarchy: { kind: 'subtask', parentId: 't1' }, title: '' };
