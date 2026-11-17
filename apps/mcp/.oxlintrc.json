@@ -8,5 +8,5 @@
     "unicorn/filename-case": ["error", { "cases": { "kebabCase": true } }]
   },
   "env": { "builtin": true },
-  "ignorePatterns": ["dist", ".cloudflare", ".wrangler", "**/*.test.ts", "**/*.test-d.ts"]
+  "ignorePatterns": ["dist", ".cloudflare", ".wrangler", "**/*.test.ts", "**/*.test.tsx", "**/*.test-d.ts"]
 }

@@ -13,7 +13,9 @@
     "skipLibCheck": true,
     "noEmit": true,
     "types": [],
-    "allowImportingTsExtensions": true
+    "allowImportingTsExtensions": true,
+    "jsx": "react-jsx",
+    "jsxImportSource": "hono/jsx"
   },
-  "include": ["src/**/*.ts", "cloudflare.config.ts", "vite.config.ts", "vitest.config.ts", ".cloudflare/types/index.d.ts"]
+  "include": ["src/**/*.ts", "src/**/*.tsx", "cloudflare.config.ts", "vite.config.ts", "vitest.config.ts", ".cloudflare/types/index.d.ts"]
 }

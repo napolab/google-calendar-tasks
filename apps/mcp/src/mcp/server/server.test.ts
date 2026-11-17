@@ -1,0 +1,91 @@
+import { okAsync } from 'neverthrow';
+import { describe, expect, it } from 'vitest';
+
+import { readRPCBody, toolText } from '../../test-support';
+import { MCP_TOOL_NAMES, serveMCP } from './index';
+
+import type { ToolDeps } from '../tool-deps';
+import type { ICalendarService } from '@napolab/gct-core/calendar';
+import type { ITasksService } from '@napolab/gct-core/tasks';
+
+const unexpected = () => {
+  throw new Error('unexpected call');
+};
+
+const calendar: ICalendarService = {
+  listCalendars: () => okAsync([]),
+  listEvents: unexpected,
+  getEvent: unexpected,
+  createEvent: unexpected,
+  updateEvent: unexpected,
+  deleteEvent: unexpected,
+  queryFreeBusy: unexpected,
+};
+
+const tasks: ITasksService = {
+  listTaskLists: unexpected,
+  listTasks: unexpected,
+  getTask: unexpected,
+  createTask: unexpected,
+  updateTask: unexpected,
+  completeTask: unexpected,
+  reopenTask: unexpected,
+  deleteTask: unexpected,
+};
+
+const deps: ToolDeps = { services: { calendar, tasks }, now: () => 0, connectURL: 'https://gct.example.com/google/connect' };
+
+const rpc = (body: unknown) =>
+  new Request('https://gct.example.com/mcp', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', accept: 'application/json, text/event-stream', 'mcp-protocol-version': '2025-06-18' },
+    body: JSON.stringify(body),
+  });
+
+const call = async (body: unknown) => {
+  const response = await serveMCP(rpc(body), deps);
+  expect(response.status).toBe(200);
+  expect(response.headers.get('content-type')).toMatch(/application\/json/);
+  return readRPCBody(response);
+};
+
+describe('serveMCP', () => {
+  it('answers initialize as the gct server', async () => {
+    const body = await call({
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'initialize',
+      params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'test', version: '0' } },
+    });
+
+    expect(body).toMatchObject({ id: 1, result: { serverInfo: { name: 'gct' } } });
+  });
+
+  it('lists every calendar and tasks tool', async () => {
+    const body = await call({ jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} });
+
+    expect((body.result.tools ?? []).map((tool) => tool.name).sort()).toEqual([...MCP_TOOL_NAMES].sort());
+    expect(MCP_TOOL_NAMES).toHaveLength(14);
+  });
+
+  it('calls a tool and returns its JSON text', async () => {
+    const body = await call({ jsonrpc: '2.0', id: 3, method: 'tools/call', params: { name: 'list_calendars', arguments: {} } });
+
+    expect(body.result.isError).toBeUndefined();
+    expect(JSON.parse(toolText(body))).toEqual({ calendars: [] });
+  });
+
+  it('returns isError for arguments the schema rejects (unknown key on a write tool)', async () => {
+    const body = await call({ jsonrpc: '2.0', id: 4, method: 'tools/call', params: { name: 'create_task', arguments: { title: 'x', due_date: '2026-11-20' } } });
+
+    expect(body.result.isError).toBe(true);
+    expect(toolText(body)).toContain('due_date');
+  });
+
+  it('returns isError with the write-strict message for a malformed value', async () => {
+    const body = await call({ jsonrpc: '2.0', id: 5, method: 'tools/call', params: { name: 'create_task', arguments: { title: 'x', due: '20 Nov' } } });
+
+    expect(body.result.isError).toBe(true);
+    expect(toolText(body)).toContain('YYYY-MM-DD');
+  });
+});
