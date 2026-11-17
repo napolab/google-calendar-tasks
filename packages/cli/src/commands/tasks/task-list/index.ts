@@ -3,7 +3,7 @@ import { okAsync } from 'neverthrow';
 
 import type { ListTarget, Targeted } from '../input';
 import type { AmbiguousTaskListError, GoogleError, TaskListNotFoundError } from '@napolab/gct-core/errors';
-import type { ITasksService } from '@napolab/gct-core/tasks';
+import type { ITasksService, TaskListSummary } from '@napolab/gct-core/tasks';
 import type { ResultAsync } from 'neverthrow';
 
 // `--list <title or id>` → the task list id core takes. The default list needs no lookup; a name is matched
@@ -11,15 +11,15 @@ import type { ResultAsync } from 'neverthrow';
 
 export type ResolveListError = GoogleError | TaskListNotFoundError | AmbiguousTaskListError;
 
+// A title or id → the whole list (for commands that print which list they acted on).
+export const resolveNamedTaskList = (tasks: ITasksService, name: string): ResultAsync<TaskListSummary, ResolveListError> => tasks.listTaskLists().andThen((lists) => resolveTaskList(lists, name));
+
 export const resolveListTarget = (tasks: ITasksService, target: ListTarget): ResultAsync<string, ResolveListError> => {
   switch (target.kind) {
     case 'default':
       return okAsync(DEFAULT_TASK_LIST_ID);
     case 'named':
-      return tasks
-        .listTaskLists()
-        .andThen((lists) => resolveTaskList(lists, target.name))
-        .map((list) => list.id);
+      return resolveNamedTaskList(tasks, target.name).map((list) => list.id);
     default: {
       const _exhaustive: never = target;
       throw new Error(`unhandled list target: ${JSON.stringify(_exhaustive)}`);

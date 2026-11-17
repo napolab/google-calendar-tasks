@@ -94,7 +94,7 @@ export type ListTarget = { readonly kind: 'default' } | { readonly kind: 'named'
 // A core input without its task list, and the list it goes to once resolved.
 export type Targeted<T> = { readonly list: ListTarget; readonly input: Omit<T, 'taskListId'> };
 
-const toListTarget = (list: string | undefined): ListTarget => (list === undefined || list === DEFAULT_TASK_LIST_ID ? { kind: 'default' } : { kind: 'named', name: list });
+export const toListTarget = (list: string | undefined): ListTarget => (list === undefined || list === DEFAULT_TASK_LIST_ID ? { kind: 'default' } : { kind: 'named', name: list });
 
 const parseOptionalDate = (flag: string, value: string | undefined): Result<string | undefined, InvalidInputError> => (value === undefined ? ok(undefined) : parseDate(flag, value));
 

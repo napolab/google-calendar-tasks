@@ -47,6 +47,10 @@ const unusedCalendar: ICalendarService = {
 
 const unusedTasks: ITasksService = {
   listTaskLists: unexpected,
+  getTaskList: unexpected,
+  createTaskList: unexpected,
+  renameTaskList: unexpected,
+  deleteTaskList: unexpected,
   listTasks: unexpected,
   getTask: unexpected,
   createTask: unexpected,

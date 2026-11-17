@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest';
 
 import { fakeServices } from '../../../test-support';
 
-import { resolveListTarget, resolveTargeted } from './index';
+import { resolveListTarget, resolveNamedTaskList, resolveTargeted } from './index';
 
 import type { TaskListSummary } from '@napolab/gct-core/tasks';
 
@@ -50,5 +50,15 @@ describe('resolveListTarget', () => {
 describe('resolveTargeted', () => {
   it('puts the resolved list id into the core input', async () => {
     expect((await resolveTargeted(withLists(), { list: { kind: 'named', name: '日常タスク' }, input: { taskId: 't1' } }))._unsafeUnwrap()).toEqual({ taskListId: 'MDI', taskId: 't1' });
+  });
+});
+
+describe('resolveNamedTaskList', () => {
+  it('resolves a title to the whole list summary', async () => {
+    expect((await resolveNamedTaskList(withLists(), '日常タスク'))._unsafeUnwrap()).toEqual(LISTS[1]);
+  });
+
+  it('fails with TaskListNotFoundError for an unknown name', async () => {
+    expect((await resolveNamedTaskList(withLists(), 'nope'))._unsafeUnwrapErr()).toBeInstanceOf(TaskListNotFoundError);
   });
 });
