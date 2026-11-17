@@ -3,7 +3,6 @@ import { ResultAsync } from 'neverthrow';
 
 import { formatInstant } from '../shared/display-time';
 import { extraArgsOf, rejectExtraArgs } from '../shared/flags/extra-args';
-import { jsonArg } from '../shared/flags/json';
 import { renderWith, report } from '../shared/output';
 
 import type { CliContext, LoginError, LoginSession, LoginSummary } from '../../context';
@@ -25,9 +24,7 @@ const completeLogin = async (session: LoginSession): Promise<Result<LoginSummary
   return await owned.complete();
 };
 
-const loginArgs = { ...jsonArg };
-
-export const runLogin = (ctx: CliContext, values: ArgValues<typeof loginArgs>, extra: readonly string[]): Promise<void> => {
+export const runLogin = (ctx: CliContext, values: LoginValues, extra: readonly string[]): Promise<void> => {
   const signal = AbortSignal.timeout(LOGIN_TIMEOUT_MS);
   return report(
     ctx.output,
@@ -42,6 +39,11 @@ export const createLoginCommand = (context: CliContext) =>
   define({
     name: 'login',
     description: 'Log in to Google in your browser and store the refresh token locally',
-    args: loginArgs,
-    run: (ctx) => runLogin(context, ctx.values, extraArgsOf(ctx, 0)),
+    args: {
+      json: { type: 'boolean', description: 'Print the result as JSON' },
+    },
+    run: (ctx): Promise<void> => runLogin(context, ctx.values, extraArgsOf(ctx, 0)),
   });
+
+// Flag values the command parses, derived from its own `args`.
+export type LoginValues = ArgValues<ReturnType<typeof createLoginCommand>['args']>;

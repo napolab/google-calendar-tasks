@@ -1,7 +1,6 @@
 import { define } from 'gunshi';
 
 import { extraArgsOf, rejectExtraArgs } from '../shared/flags/extra-args';
-import { jsonArg } from '../shared/flags/json';
 import { renderWith, report } from '../shared/output';
 
 import type { CliContext } from '../../context';
@@ -31,9 +30,7 @@ export const formatCalendar = (calendar: CalendarSummary): string => {
 
 export const formatCalendars = (calendars: readonly CalendarSummary[]): string => (calendars.length === 0 ? 'No calendars.' : calendars.map(formatCalendar).join('\n'));
 
-const calendarsArgs = { ...jsonArg };
-
-export const runCalendars = (ctx: CliContext, values: ArgValues<typeof calendarsArgs>, extra: readonly string[]): Promise<void> =>
+export const runCalendars = (ctx: CliContext, values: CalendarsValues, extra: readonly string[]): Promise<void> =>
   report(
     ctx.output,
     rejectExtraArgs(extra).asyncAndThen(() => ctx.services().andThen((services) => services.calendar.listCalendars())),
@@ -44,6 +41,11 @@ export const createCalendarsCommand = (context: CliContext) =>
   define({
     name: 'calendars',
     description: 'List your calendars (* marks the primary one); the bracketed id is what --calendar takes',
-    args: calendarsArgs,
-    run: (ctx) => runCalendars(context, ctx.values, extraArgsOf(ctx, 0)),
+    args: {
+      json: { type: 'boolean', description: 'Print the result as JSON' },
+    },
+    run: (ctx): Promise<void> => runCalendars(context, ctx.values, extraArgsOf(ctx, 0)),
   });
+
+// Flag values the command parses, derived from its own `args`.
+export type CalendarsValues = ArgValues<ReturnType<typeof createCalendarsCommand>['args']>;

@@ -3,82 +3,27 @@ import { InvalidInputError } from '@napolab/gct-core/errors';
 import { err, ok } from 'neverthrow';
 
 import { CLI_TIME_ZONE, nextDate, parseDate, parseDateTime, parseWindowBound, toWindowEnd, toWindowStart } from '../../shared/flags/date';
-import { jsonArg } from '../../shared/flags/json';
 import { toListPatch, toTextPatch } from '../../shared/flags/patch';
 
 import type { WindowBound } from '../../shared/flags/date';
+import type { CreateEventValues, GetEventValues, ListEventsValues, UpdateEventValues } from '../index';
 import type { AttendeeInput, CreateEventInput, EventRef, EventTime, FieldPatch, ListEventsInput, TimePatch, TimeWindow, TimeZoneRef, UpdateEventInput } from '@napolab/gct-core/calendar';
-import type { ArgValues, Args } from 'gunshi';
 import type { Result } from 'neverthrow';
 
-// `gct events ...` flags and their mapping to core calendar inputs. Pure: the clock is passed in.
+// `gct events ...` flags (declared by the commands in ../index) and their mapping to core calendar inputs. Pure: the clock is passed in.
 // CLI defaults live here because core inputs are required unions.
 
-const DEFAULT_WINDOW_DAYS = 7;
+export const DEFAULT_WINDOW_DAYS = 7;
 
-const DATE_TIME_EXAMPLE = '2026-11-17T10:00:00+09:00';
+export const DATE_TIME_EXAMPLE = '2026-11-17T10:00:00+09:00';
 
-// ---- flag schemas ----
+type Flags<V> = Omit<V, 'eventId' | 'json'>;
 
-const calendarArg = {
-  calendar: { type: 'string', description: "Calendar id (default: your primary calendar; see 'gct calendars')" },
-} satisfies Args;
-
-const eventIdArg = {
-  eventId: { type: 'positional', description: 'Event id (shown in brackets by `gct events list`)' },
-} satisfies Args;
-
-const timeArgs = {
-  date: { type: 'string', description: 'All-day event on this date (YYYY-MM-DD)' },
-  endDate: { type: 'string', description: 'Last day of a multi-day all-day event, inclusive (YYYY-MM-DD; needs --date)' },
-  start: { type: 'string', description: `Start of a timed event, RFC 3339 with offset (e.g. ${DATE_TIME_EXAMPLE})` },
-  end: { type: 'string', description: 'End of a timed event, RFC 3339 with offset' },
-  timeZone: { type: 'string', description: 'IANA zone a timed event is anchored to (e.g. Asia/Tokyo); the offset alone is used when absent' },
-} satisfies Args;
-
-export const listEventsArgs = {
-  ...calendarArg,
-  from: { type: 'string', description: `Window start: YYYY-MM-DD (Asia/Tokyo) or RFC 3339 with offset (default: now)` },
-  to: { type: 'string', description: `Window end: YYYY-MM-DD (inclusive day, Asia/Tokyo) or RFC 3339 with offset (default: ${DEFAULT_WINDOW_DAYS} days after --from)` },
-  search: { type: 'string', description: 'Free-text search over summary, description, location and attendees' },
-  max: { type: 'number', default: 50, description: 'Events per page (1-2500)' },
-  pageToken: { type: 'string', description: 'Page token printed by the previous page' },
-  ...jsonArg,
-} satisfies Args;
-
-export const eventRefArgs = { ...eventIdArg, ...calendarArg, ...jsonArg } satisfies Args;
-
-export const createEventArgs = {
-  summary: { type: 'string', required: true, description: 'Event title' },
-  ...timeArgs,
-  description: { type: 'string', description: 'Event description' },
-  location: { type: 'string', description: 'Event location' },
-  attendee: { type: 'string', multiple: true, description: 'Attendee email (repeat for several)' },
-  ...calendarArg,
-  ...jsonArg,
-} satisfies Args;
-
-export const updateEventArgs = {
-  ...eventIdArg,
-  summary: { type: 'string', description: 'New title' },
-  description: { type: 'string', description: 'New description' },
-  clearDescription: { type: 'boolean', description: 'Remove the description' },
-  location: { type: 'string', description: 'New location' },
-  clearLocation: { type: 'boolean', description: 'Remove the location' },
-  attendee: { type: 'string', multiple: true, description: 'Replace the attendees with these emails (repeat for several)' },
-  clearAttendees: { type: 'boolean', description: 'Remove every attendee' },
-  ...timeArgs,
-  ...calendarArg,
-  ...jsonArg,
-} satisfies Args;
-
-type Flags<A extends Args> = Omit<ArgValues<A>, 'eventId' | 'json'>;
-
-export type ListEventsFlags = Flags<typeof listEventsArgs>;
-export type CreateEventFlags = Flags<typeof createEventArgs>;
-export type UpdateEventFlags = Flags<typeof updateEventArgs>;
-export type EventRefFlags = Flags<typeof eventRefArgs>;
-type TimeFlags = Flags<typeof timeArgs>;
+export type ListEventsFlags = Flags<ListEventsValues>;
+export type CreateEventFlags = Flags<CreateEventValues>;
+export type UpdateEventFlags = Flags<UpdateEventValues>;
+export type EventRefFlags = Flags<GetEventValues>;
+type TimeFlags = Pick<CreateEventValues, 'date' | 'endDate' | 'start' | 'end' | 'timeZone'>;
 
 // ---- shared ----
 

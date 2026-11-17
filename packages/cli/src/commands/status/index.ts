@@ -3,7 +3,6 @@ import { define } from 'gunshi';
 
 import { formatInstant } from '../shared/display-time';
 import { extraArgsOf, rejectExtraArgs } from '../shared/flags/extra-args';
-import { jsonArg } from '../shared/flags/json';
 import { renderWith, report } from '../shared/output';
 
 import type { AuthStatus, CliContext } from '../../context';
@@ -57,9 +56,7 @@ export const formatStatus = (status: Status): string => {
   }
 };
 
-const statusArgs = { ...jsonArg };
-
-export const runStatus = (ctx: CliContext, values: ArgValues<typeof statusArgs>, extra: readonly string[]): Promise<void> =>
+export const runStatus = (ctx: CliContext, values: StatusValues, extra: readonly string[]): Promise<void> =>
   report(
     ctx.output,
     rejectExtraArgs(extra)
@@ -72,6 +69,11 @@ export const createStatusCommand = (context: CliContext) =>
   define({
     name: 'status',
     description: 'Show whether you are logged in, where the credentials are stored and the granted scopes',
-    args: statusArgs,
-    run: (ctx) => runStatus(context, ctx.values, extraArgsOf(ctx, 0)),
+    args: {
+      json: { type: 'boolean', description: 'Print the result as JSON' },
+    },
+    run: (ctx): Promise<void> => runStatus(context, ctx.values, extraArgsOf(ctx, 0)),
   });
+
+// Flag values the command parses, derived from its own `args`.
+export type StatusValues = ArgValues<ReturnType<typeof createStatusCommand>['args']>;

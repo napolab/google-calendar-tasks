@@ -3,9 +3,9 @@ import { DEFAULT_TASK_LIST_ID } from '@napolab/gct-core/tasks';
 import { err, ok } from 'neverthrow';
 
 import { parseDate } from '../../shared/flags/date';
-import { jsonArg } from '../../shared/flags/json';
 import { toKeepOrSet, toTextPatch } from '../../shared/flags/patch';
 
+import type { AddTaskValues, CompleteTaskValues, ListTasksValues, UpdateTaskValues } from '../index';
 import type {
   CompletedTasksFilter,
   CreateTaskInput,
@@ -18,73 +18,20 @@ import type {
   TaskSiblingPosition,
   UpdateTaskInput,
 } from '@napolab/gct-core/tasks';
-import type { ArgValues, Args } from 'gunshi';
 import type { Result } from 'neverthrow';
 
-// `gct tasks ...` flags and their mapping to core tasks inputs. Pure. CLI defaults (include completed tasks,
+// `gct tasks ...` flags (declared by the commands in ../index) and their mapping to core tasks inputs. Pure. CLI defaults (include completed tasks,
 // 100 per page) live here because core inputs are required unions. `--list` stays unresolved here: a title or id
 // is looked up by the command (../task-list) once the input is valid.
 
-const COMPLETED_CHOICES = ['exclude', 'include', 'hidden'] as const;
+type CompletedChoice = ListTasksValues['completed'];
 
-type CompletedChoice = (typeof COMPLETED_CHOICES)[number];
+type Flags<V> = Omit<V, 'taskId' | 'title' | 'json'>;
 
-// ---- flag schemas ----
-
-const LIST_VALUE = "a task list title or id, or @default (see 'gct tasklists')";
-
-const listArg = {
-  list: { type: 'string', description: `Task list: ${LIST_VALUE} (default: your default list)` },
-} satisfies Args;
-
-const taskIdArg = {
-  taskId: { type: 'positional', description: 'Task id (shown in brackets by `gct tasks list`)' },
-} satisfies Args;
-
-export const listTasksArgs = {
-  list: { type: 'string', description: `Only this task list: ${LIST_VALUE} (default: every list)` },
-  dueFrom: { type: 'string', description: 'Only tasks due on or after this date (YYYY-MM-DD)' },
-  dueTo: { type: 'string', description: 'Only tasks due on or before this date (YYYY-MM-DD)' },
-  completed: {
-    type: 'enum',
-    choices: COMPLETED_CHOICES,
-    default: 'include',
-    description: 'Completed tasks: exclude, include, or hidden (also those completed in Google apps, which Google hides)',
-  },
-  max: { type: 'number', default: 100, description: 'Tasks per page (1-100)' },
-  pageToken: { type: 'string', description: 'Page token printed by the previous page (needs --list: a token belongs to one list)' },
-  ...jsonArg,
-} satisfies Args;
-
-export const addTaskArgs = {
-  title: { type: 'positional', description: 'Task title (quote it when it has spaces)' },
-  notes: { type: 'string', description: 'Task notes' },
-  due: { type: 'string', description: 'Due date (YYYY-MM-DD; Google Tasks has no due time)' },
-  parent: { type: 'string', description: 'Create as a subtask of this task id' },
-  after: { type: 'string', description: 'Place after this sibling task id (default: first)' },
-  ...listArg,
-  ...jsonArg,
-} satisfies Args;
-
-export const updateTaskArgs = {
-  ...taskIdArg,
-  title: { type: 'string', description: 'New title' },
-  notes: { type: 'string', description: 'New notes' },
-  clearNotes: { type: 'boolean', description: 'Remove the notes' },
-  due: { type: 'string', description: 'New due date (YYYY-MM-DD)' },
-  clearDue: { type: 'boolean', description: 'Remove the due date' },
-  ...listArg,
-  ...jsonArg,
-} satisfies Args;
-
-export const taskRefArgs = { ...taskIdArg, ...listArg, ...jsonArg } satisfies Args;
-
-type Flags<A extends Args> = Omit<ArgValues<A>, 'taskId' | 'title' | 'json'>;
-
-export type ListTasksFlags = Flags<typeof listTasksArgs>;
-export type AddTaskFlags = Flags<typeof addTaskArgs>;
-export type UpdateTaskFlags = Omit<ArgValues<typeof updateTaskArgs>, 'taskId' | 'json'>;
-export type TaskRefFlags = Flags<typeof taskRefArgs>;
+export type ListTasksFlags = Flags<ListTasksValues>;
+export type AddTaskFlags = Flags<AddTaskValues>;
+export type UpdateTaskFlags = Omit<UpdateTaskValues, 'taskId' | 'json'>;
+export type TaskRefFlags = Flags<CompleteTaskValues>;
 
 // ---- shared ----
 

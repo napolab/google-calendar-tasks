@@ -3,27 +3,19 @@ import { define } from 'gunshi';
 import { formatInstant, formatInstantRange } from '../shared/display-time';
 import { CLI_TIME_ZONE, parseWindowBound, toWindowEnd, toWindowStart } from '../shared/flags/date';
 import { extraArgsOf, rejectExtraArgs } from '../shared/flags/extra-args';
-import { jsonArg } from '../shared/flags/json';
 import { renderWith, report } from '../shared/output';
 
 import type { CliContext } from '../../context';
 import type { InvalidInputError } from '@napolab/gct-core/errors';
 import type { CalendarAvailability, FreeBusyInput, FreeBusyResult } from '@napolab/gct-core/calendar';
-import type { ArgValues, Args } from 'gunshi';
+import type { ArgValues } from 'gunshi';
 import type { Result } from 'neverthrow';
 
 // `gct freebusy --from --to [--calendar ...]`: busy intervals of one or more calendars.
 
 const PRIMARY_CALENDAR = 'primary';
 
-export const freeBusyArgs = {
-  from: { type: 'string', required: true, description: 'Window start: YYYY-MM-DD (Asia/Tokyo) or RFC 3339 with offset' },
-  to: { type: 'string', required: true, description: 'Window end: YYYY-MM-DD (inclusive day, Asia/Tokyo) or RFC 3339 with offset' },
-  calendar: { type: 'string', multiple: true, description: 'Calendar id to check (repeat for several; default: primary)' },
-  ...jsonArg,
-} satisfies Args;
-
-export type FreeBusyFlags = Omit<ArgValues<typeof freeBusyArgs>, 'json'>;
+export type FreeBusyFlags = Omit<FreeBusyValues, 'json'>;
 
 export const toFreeBusyInput = (flags: FreeBusyFlags): Result<FreeBusyInput, InvalidInputError> =>
   parseWindowBound('--from', flags.from).andThen((from) =>
@@ -48,7 +40,7 @@ const formatAvailability = (availability: CalendarAvailability): readonly string
 export const formatFreeBusy = (result: FreeBusyResult): string =>
   [`Free/busy ${formatInstant(result.timeMin)} – ${formatInstant(result.timeMax)} (${CLI_TIME_ZONE})`, ...result.calendars.flatMap(formatAvailability)].join('\n');
 
-export const runFreeBusy = (ctx: CliContext, values: ArgValues<typeof freeBusyArgs>, extra: readonly string[]): Promise<void> =>
+export const runFreeBusy = (ctx: CliContext, values: FreeBusyValues, extra: readonly string[]): Promise<void> =>
   report(
     ctx.output,
     rejectExtraArgs(extra)
@@ -61,6 +53,14 @@ export const createFreeBusyCommand = (context: CliContext) =>
   define({
     name: 'freebusy',
     description: 'Show busy intervals of one or more calendars between --from and --to',
-    args: freeBusyArgs,
-    run: (ctx) => runFreeBusy(context, ctx.values, extraArgsOf(ctx, 0)),
+    args: {
+      from: { type: 'string', required: true, description: 'Window start: YYYY-MM-DD (Asia/Tokyo) or RFC 3339 with offset' },
+      to: { type: 'string', required: true, description: 'Window end: YYYY-MM-DD (inclusive day, Asia/Tokyo) or RFC 3339 with offset' },
+      calendar: { type: 'string', multiple: true, description: 'Calendar id to check (repeat for several; default: primary)' },
+      json: { type: 'boolean', description: 'Print the result as JSON' },
+    },
+    run: (ctx): Promise<void> => runFreeBusy(context, ctx.values, extraArgsOf(ctx, 0)),
   });
+
+// Flag values the command parses, derived from its own `args`.
+export type FreeBusyValues = ArgValues<ReturnType<typeof createFreeBusyCommand>['args']>;

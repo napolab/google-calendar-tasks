@@ -1,10 +1,9 @@
 import { define } from 'gunshi';
 
 import { extraArgsOf, rejectExtraArgs } from '../shared/flags/extra-args';
-import { jsonArg } from '../shared/flags/json';
 import { prefixed, renderWith, report } from '../shared/output';
 import { resolveNamedTaskList, resolveTargeted } from '../tasks/task-list';
-import { addTaskListArgs, deleteTaskListArgs, renameTaskListArgs, toCreateTaskListInput, toDeleteTaskListName, toRenameTaskListInput } from './input';
+import { toCreateTaskListInput, toDeleteTaskListName, toRenameTaskListInput } from './input';
 
 import type { CliContext } from '../../context';
 import type { TaskListSummary } from '@napolab/gct-core/tasks';
@@ -22,16 +21,16 @@ export const formatTaskLists = (lists: readonly TaskListSummary[]): string => (l
 
 const formatDeleted = (deleted: DeletedTaskList): string => `Deleted task list ${formatTaskList(deleted.taskList)}.`;
 
-const taskListsArgs = { ...jsonArg };
+const LIST_VALUE = "a task list title or id (see 'gct tasklists')";
 
-export const runTaskLists = (ctx: CliContext, values: ArgValues<typeof taskListsArgs>, extra: readonly string[]): Promise<void> =>
+export const runTaskLists = (ctx: CliContext, values: TaskListsValues, extra: readonly string[]): Promise<void> =>
   report(
     ctx.output,
     rejectExtraArgs(extra).asyncAndThen(() => ctx.services().andThen((services) => services.tasks.listTaskLists())),
     renderWith(values.json, formatTaskLists),
   );
 
-export const runAddTaskList = (ctx: CliContext, values: ArgValues<typeof addTaskListArgs>, extra: readonly string[]): Promise<void> =>
+export const runAddTaskList = (ctx: CliContext, values: AddTaskListValues, extra: readonly string[]): Promise<void> =>
   report(
     ctx.output,
     rejectExtraArgs(extra)
@@ -40,7 +39,7 @@ export const runAddTaskList = (ctx: CliContext, values: ArgValues<typeof addTask
     renderWith(values.json, prefixed('Added: ', formatTaskList)),
   );
 
-export const runRenameTaskList = (ctx: CliContext, values: ArgValues<typeof renameTaskListArgs>, extra: readonly string[]): Promise<void> =>
+export const runRenameTaskList = (ctx: CliContext, values: RenameTaskListValues, extra: readonly string[]): Promise<void> =>
   report(
     ctx.output,
     rejectExtraArgs(extra)
@@ -49,7 +48,7 @@ export const runRenameTaskList = (ctx: CliContext, values: ArgValues<typeof rena
     renderWith(values.json, prefixed('Renamed: ', formatTaskList)),
   );
 
-export const runDeleteTaskList = (ctx: CliContext, values: ArgValues<typeof deleteTaskListArgs>, extra: readonly string[]): Promise<void> =>
+export const runDeleteTaskList = (ctx: CliContext, values: DeleteTaskListValues, extra: readonly string[]): Promise<void> =>
   report(
     ctx.output,
     rejectExtraArgs(extra)
@@ -66,39 +65,69 @@ export const runDeleteTaskList = (ctx: CliContext, values: ArgValues<typeof dele
 
 const LIST_DESCRIPTION = 'List your task lists; `gct tasks ... --list` takes the title or the bracketed id';
 
-export const createTaskListsCommand = (context: CliContext) => {
-  // gunshi runs a command's own `run` when no sub-command name follows it, so bare `gct tasklists` keeps listing.
-  const list = define({
+export const createListTaskListsCommand = (context: CliContext) =>
+  define({
     name: 'list',
     description: LIST_DESCRIPTION,
-    args: taskListsArgs,
-    run: (ctx) => runTaskLists(context, ctx.values, extraArgsOf(ctx, 0)),
+    args: {
+      json: { type: 'boolean', description: 'Print the result as JSON' },
+    },
+    run: (ctx): Promise<void> => runTaskLists(context, ctx.values, extraArgsOf(ctx, 0)),
   });
-  return define({
+
+export const createAddTaskListCommand = (context: CliContext) =>
+  define({
+    name: 'add',
+    description: 'Create a task list',
+    args: {
+      title: { type: 'positional', description: 'Title of the new task list (quote it when it has spaces)' },
+      json: { type: 'boolean', description: 'Print the result as JSON' },
+    },
+    run: (ctx): Promise<void> => runAddTaskList(context, ctx.values, extraArgsOf(ctx, 1)),
+  });
+
+export const createRenameTaskListCommand = (context: CliContext) =>
+  define({
+    name: 'rename',
+    description: 'Rename a task list',
+    args: {
+      list: { type: 'positional', description: `The task list to rename: ${LIST_VALUE}, or @default` },
+      title: { type: 'positional', description: 'New title (quote it when it has spaces)' },
+      json: { type: 'boolean', description: 'Print the result as JSON' },
+    },
+    run: (ctx): Promise<void> => runRenameTaskList(context, ctx.values, extraArgsOf(ctx, 2)),
+  });
+
+export const createDeleteTaskListCommand = (context: CliContext) =>
+  define({
+    name: 'delete',
+    description: 'Delete a task list and every task in it (cannot be undone; the default list cannot be deleted)',
+    args: {
+      list: { type: 'positional', description: `The task list to delete with every task in it: ${LIST_VALUE}. The default list cannot be deleted` },
+      json: { type: 'boolean', description: 'Print the result as JSON' },
+    },
+    run: (ctx): Promise<void> => runDeleteTaskList(context, ctx.values, extraArgsOf(ctx, 1)),
+  });
+
+// Flag values each command parses, derived from its own `args`. Bare `gct tasklists` takes the same flags as `list`.
+export type TaskListsValues = ArgValues<ReturnType<typeof createListTaskListsCommand>['args']>;
+export type AddTaskListValues = ArgValues<ReturnType<typeof createAddTaskListCommand>['args']>;
+export type RenameTaskListValues = ArgValues<ReturnType<typeof createRenameTaskListCommand>['args']>;
+export type DeleteTaskListValues = ArgValues<ReturnType<typeof createDeleteTaskListCommand>['args']>;
+
+// gunshi runs a command's own `run` when no sub-command name follows it, so bare `gct tasklists` keeps listing.
+export const createTaskListsCommand = (context: CliContext) =>
+  define({
     name: 'tasklists',
     description: `${LIST_DESCRIPTION}; add, rename or delete one with a sub-command`,
-    args: taskListsArgs,
-    subCommands: {
-      list,
-      add: define({
-        name: 'add',
-        description: 'Create a task list',
-        args: addTaskListArgs,
-        run: (ctx) => runAddTaskList(context, ctx.values, extraArgsOf(ctx, 1)),
-      }),
-      rename: define({
-        name: 'rename',
-        description: 'Rename a task list',
-        args: renameTaskListArgs,
-        run: (ctx) => runRenameTaskList(context, ctx.values, extraArgsOf(ctx, 2)),
-      }),
-      delete: define({
-        name: 'delete',
-        description: 'Delete a task list and every task in it (cannot be undone; the default list cannot be deleted)',
-        args: deleteTaskListArgs,
-        run: (ctx) => runDeleteTaskList(context, ctx.values, extraArgsOf(ctx, 1)),
-      }),
+    args: {
+      json: { type: 'boolean', description: 'Print the result as JSON' },
     },
-    run: (ctx) => runTaskLists(context, ctx.values, extraArgsOf(ctx, 0)),
+    subCommands: {
+      list: createListTaskListsCommand(context),
+      add: createAddTaskListCommand(context),
+      rename: createRenameTaskListCommand(context),
+      delete: createDeleteTaskListCommand(context),
+    },
+    run: (ctx): Promise<void> => runTaskLists(context, ctx.values, extraArgsOf(ctx, 0)),
   });
-};

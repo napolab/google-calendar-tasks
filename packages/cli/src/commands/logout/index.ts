@@ -1,7 +1,6 @@
 import { define } from 'gunshi';
 
 import { extraArgsOf, rejectExtraArgs } from '../shared/flags/extra-args';
-import { jsonArg } from '../shared/flags/json';
 import { renderWith, report } from '../shared/output';
 
 import type { CliContext, LogoutOutcome, Revocation } from '../../context';
@@ -68,9 +67,7 @@ export const formatLogout = (report: LogoutReport): string => {
   }
 };
 
-const logoutArgs = { ...jsonArg };
-
-export const runLogout = (ctx: CliContext, values: ArgValues<typeof logoutArgs>, extra: readonly string[]): Promise<void> =>
+export const runLogout = (ctx: CliContext, values: LogoutValues, extra: readonly string[]): Promise<void> =>
   report(
     ctx.output,
     rejectExtraArgs(extra)
@@ -83,6 +80,11 @@ export const createLogoutCommand = (context: CliContext) =>
   define({
     name: 'logout',
     description: 'Revoke the stored Google refresh token and delete it locally',
-    args: logoutArgs,
-    run: (ctx) => runLogout(context, ctx.values, extraArgsOf(ctx, 0)),
+    args: {
+      json: { type: 'boolean', description: 'Print the result as JSON' },
+    },
+    run: (ctx): Promise<void> => runLogout(context, ctx.values, extraArgsOf(ctx, 0)),
   });
+
+// Flag values the command parses, derived from its own `args`.
+export type LogoutValues = ArgValues<ReturnType<typeof createLogoutCommand>['args']>;
