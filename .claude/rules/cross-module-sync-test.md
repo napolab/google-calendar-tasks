@@ -20,6 +20,8 @@ Some values must stay literal for tooling (e.g. dynamic `import('@shikijs/langs/
 
 ## Known Sync Pairs in This Repo
 
-| _(none yet)_ | |
+| Side A | Side B (test) |
+| ------ | ------------- |
+| `VALID_IDS_FROM` (`apps/mcp/src/mcp/tool-result/error-messages`) — the `list_*` tools a 404 hint names | `MCP_TOOL_NAMES` (`apps/mcp/src/mcp/server`), asserted in `error-messages.test.ts` |
 
 Add new pairs to this table when you introduce one. When the two sides live in different workspaces, import the other side through its package subpath export.

@@ -1,6 +1,7 @@
 import { ok, toToolError } from '../../tool-result';
 import { ADDITIVE, DESTRUCTIVE, IDEMPOTENT_UPDATE, NOTIFY_NOTE, PRIMARY_CALENDAR, READ_ONLY } from '../shared';
 import {
+  GUESTS_MODIFY_NOTE,
   createEventArgs,
   deleteEventArgs,
   eventRefArgs,
@@ -38,7 +39,7 @@ const newRequestId = (): string => crypto.randomUUID();
 
 export const createEventToolHandlers = (deps: ToolDeps) => {
   const { calendar } = deps.services;
-  const fail = toToolError(deps.connectURL);
+  const fail = toToolError(deps.connectURL, 'events');
 
   return {
     listCalendars: (): Promise<ToolResult> =>
@@ -144,7 +145,8 @@ export const registerEventTools = (server: McpServer, deps: ToolDeps): void => {
     'get_event',
     {
       title: 'Get event',
-      description: 'Get one event by id (from list_events), including reminders, color, Meet link and status-event properties.',
+      description:
+        "Get one event by id (from list_events), including reminders, color, Meet link, iCalUID and status-event properties. A deleted event (or a cancelled occurrence of a series) is still returned, as { status: 'cancelled', deleted: true, note } with no details.",
       inputSchema: eventRefArgs,
       annotations: READ_ONLY,
     },
@@ -155,7 +157,7 @@ export const registerEventTools = (server: McpServer, deps: ToolDeps): void => {
     'create_event',
     {
       title: 'Create event',
-      description: `Create an event. ${TIME_HELP} Write the offset explicitly (Asia/Tokyo is +09:00). Optional: optional guests, recurrence (RRULE lines; a timed series needs time.timeZone), reminders, colorId, visibility, transparency, guest permissions, addGoogleMeet, and eventType for focusTime / outOfOffice / workingLocation (primary calendar only). ${NOTIFY_NOTE} Returns the created event with its id.`,
+      description: `Create an event. ${TIME_HELP} Write the offset explicitly (Asia/Tokyo is +09:00). Optional: optional guests, recurrence (RRULE lines; a timed series needs time.timeZone), reminders, colorId, visibility, transparency, guest permissions, addGoogleMeet, and eventType for focusTime / outOfOffice / workingLocation (primary calendar only). ${GUESTS_MODIFY_NOTE} ${NOTIFY_NOTE} Returns the created event with its id.`,
       inputSchema: createEventArgs,
       annotations: ADDITIVE,
     },
@@ -188,7 +190,7 @@ export const registerEventTools = (server: McpServer, deps: ToolDeps): void => {
     'update_event',
     {
       title: 'Update event',
-      description: `Change an event. Omitted fields are kept. To remove a description / location / all guests / color pass clearDescription / clearLocation / clearAttendees / clearColor: true (never an empty string). attendees + optionalAttendees replace the whole guest list. recurrence replaces every rule. ${TIME_HELP} ${NOTIFY_NOTE}`,
+      description: `Change an event. Omitted fields are kept. To remove a description / location / all guests / color pass clearDescription / clearLocation / clearAttendees / clearColor: true (never an empty string). attendees + optionalAttendees replace the whole guest list. recurrence replaces every rule. ${TIME_HELP} ${GUESTS_MODIFY_NOTE} ${NOTIFY_NOTE}`,
       inputSchema: updateEventArgs,
       annotations: IDEMPOTENT_UPDATE,
     },
@@ -199,7 +201,7 @@ export const registerEventTools = (server: McpServer, deps: ToolDeps): void => {
     'move_event',
     {
       title: 'Move event to another calendar',
-      description: `Move an event (a normal event, not a focus time / out-of-office / working location one) from calendarId to the destination calendar (changes its organizer calendar). ${NOTIFY_NOTE}`,
+      description: `Move an event (a normal event, not a focus time / out-of-office / working location one) from calendarId to the destination calendar (changes its organizer calendar). Returns the event as it now is on the destination calendar. ${NOTIFY_NOTE}`,
       inputSchema: moveEventArgs,
       annotations: ADDITIVE,
     },

@@ -24,6 +24,7 @@ const active = (overrides: Partial<ActiveEvent>): ActiveEvent => ({
   guests: { canModify: false, canInviteOthers: true, canSeeOtherGuests: true },
   conference: { kind: 'none' },
   hangoutLink: '',
+  iCalUID: 'e1@google.com',
   created: '2026-11-01T00:00:00Z',
   updated: '2026-11-02T00:00:00Z',
   ...overrides,
@@ -63,6 +64,7 @@ describe('toEventView', () => {
       guestsCanSeeOtherGuests: true,
       hangoutLink: null,
       conference: null,
+      iCalUID: 'e1@google.com',
       updated: '2026-11-02T00:00:00Z',
     });
   });
@@ -72,14 +74,28 @@ describe('toEventView', () => {
     expect(view).toMatchObject({ time: { kind: 'allDay', date: '2026-11-23', endDate: '2026-11-25' } });
   });
 
+  it('shows no iCalUID as null', () => {
+    expect(toEventView(active({ iCalUID: '' }))).toMatchObject({ iCalUID: null });
+  });
+
   it('names the series of a recurring instance', () => {
     const view = toEventView(active({ recurrence: { kind: 'instance', recurringEventId: 'series-1', originalStartTime: { kind: 'date', date: '2026-11-17' } } }));
     expect(view).toMatchObject({ recurrence: { kind: 'instance', recurringEventId: 'series-1' } });
   });
 
-  it('keeps only the identity of a cancelled event', () => {
+  it('marks a cancelled event as deleted and says so', () => {
     const cancelled: CalendarEvent = { status: 'cancelled', id: 'e2', calendarId: 'primary', recurrence: { kind: 'single' } };
-    expect(toEventView(cancelled)).toEqual({ id: 'e2', calendarId: 'primary', status: 'cancelled', recurrence: { kind: 'single' } });
+    expect(toEventView(cancelled)).toEqual({ id: 'e2', calendarId: 'primary', status: 'cancelled', deleted: true, recurrence: { kind: 'single' }, note: expect.stringContaining('deleted') });
+  });
+
+  it('explains a cancelled occurrence of a recurring series', () => {
+    const cancelled: CalendarEvent = {
+      status: 'cancelled',
+      id: 'e2_20261117',
+      calendarId: 'primary',
+      recurrence: { kind: 'instance', recurringEventId: 'e2', originalStartTime: { kind: 'date', date: '2026-11-17' } },
+    };
+    expect(toEventView(cancelled)).toMatchObject({ deleted: true, recurrence: { kind: 'instance', recurringEventId: 'e2' }, note: expect.stringContaining('occurrence') });
   });
 });
 
@@ -153,6 +169,17 @@ describe('toEventPageView', () => {
     const view = toEventPageView({ calendarId: 'primary', window: { kind: 'between', timeMin: 'a', timeMax: 'b' } }, page);
     expect(view).toMatchObject({ calendarId: 'primary', window: { from: 'a', to: 'b' }, nextPageToken: 'p2' });
     expect(view.events).toHaveLength(1);
+  });
+
+  it('explains a cancelled occurrence among the listed events', () => {
+    const cancelled: CalendarEvent = {
+      status: 'cancelled',
+      id: 's1_20261118',
+      calendarId: 'primary',
+      recurrence: { kind: 'instance', recurringEventId: 's1', originalStartTime: { kind: 'date', date: '2026-11-18' } },
+    };
+    const view = toEventPageView({ calendarId: 'primary', window: { kind: 'all' } }, { events: [active({}), cancelled], nextPage: { kind: 'none' } });
+    expect(view.events[1]).toMatchObject({ id: 's1_20261118', status: 'cancelled', deleted: true, note: expect.stringContaining('occurrence') });
   });
 
   it('says null when there is no next page', () => {

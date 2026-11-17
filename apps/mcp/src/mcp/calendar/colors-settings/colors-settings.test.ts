@@ -1,7 +1,8 @@
-import { okAsync } from 'neverthrow';
+import { GoogleNotFoundError } from '@napolab/gct-core/errors';
+import { errAsync, okAsync } from 'neverthrow';
 import { describe, expect, it } from 'vitest';
 
-import { depsWith, jsonOf, recorder } from '../test-support';
+import { depsWith, errorTextOf, jsonOf, recorder } from '../test-support';
 import { createColorsSettingsToolHandlers } from './index';
 
 import type { ICalendarService, SettingRef } from '@napolab/gct-core/calendar';
@@ -27,5 +28,13 @@ describe('colors and settings tools', () => {
     const handlers = handlersWith({ getSetting: get.fn });
 
     expect(jsonOf(await handlers.getSetting({ settingId: 'weekStart' }))).toEqual({ id: 'weekStart', value: '1' });
+  });
+
+  it('get_setting points an unknown id at list_settings', async () => {
+    const handlers = handlersWith({ getSetting: () => errAsync(new GoogleNotFoundError('Google API 404: Not Found')) });
+
+    const text = errorTextOf(await handlers.getSetting({ settingId: 'nope' }));
+    expect(text).toContain('list_settings');
+    expect(text).not.toContain('list_tasks');
   });
 });

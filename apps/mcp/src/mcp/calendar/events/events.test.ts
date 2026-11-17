@@ -39,6 +39,7 @@ const event: ActiveEvent = {
   guests: { canModify: false, canInviteOthers: true, canSeeOtherGuests: true },
   conference: { kind: 'none' },
   hangoutLink: '',
+  iCalUID: 'e1@google.com',
   created: '',
   updated: '2026-11-02T00:00:00Z',
 };
@@ -86,6 +87,12 @@ describe('event tools', () => {
     });
     expect(jsonOf(await handlers.updateEvent({ eventId: 'e1', summary: 'Standup' }))).toMatchObject({ id: 'e1' });
     expect(jsonOf(await handlers.getEvent({ eventId: 'e1' }))).toMatchObject({ id: 'e1' });
+  });
+
+  it('get_event reads a deleted event as a successful, explained cancelled stub', async () => {
+    const handlers = handlersWith({ getEvent: () => okAsync({ status: 'cancelled', id: 'e1', calendarId: 'primary', recurrence: { kind: 'single' } }) });
+
+    expect(jsonOf(await handlers.getEvent({ eventId: 'e1' }))).toMatchObject({ id: 'e1', calendarId: 'primary', status: 'cancelled', deleted: true, note: expect.stringContaining('deleted') });
   });
 
   it('create_event sends no notification by default and asks for Meet with a fresh request id', async () => {
@@ -151,7 +158,13 @@ describe('event tools', () => {
     const move = recorder((input: MoveEventInput) => okAsync({ ...event, calendarId: input.destination }));
     const handlers = handlersWith({ moveEvent: move.fn });
 
-    expect(jsonOf(await handlers.moveEvent({ eventId: 'e1', destination: 'team@example.com' }))).toMatchObject({ id: 'e1', calendarId: 'team@example.com' });
+    expect(jsonOf(await handlers.moveEvent({ eventId: 'e1', destination: 'team@example.com' }))).toMatchObject({
+      id: 'e1',
+      calendarId: 'team@example.com',
+      status: 'confirmed',
+      summary: 'Standup',
+      time: { kind: 'timed', start: '2026-11-17T10:00:00+09:00', end: '2026-11-17T10:15:00+09:00' },
+    });
     expect(move.calls).toEqual([{ eventId: 'e1', destination: 'team@example.com', sendUpdates: 'none' }]);
   });
 
@@ -165,10 +178,10 @@ describe('event tools', () => {
   });
 
   it('import_event maps the event details with the iCalUID', async () => {
-    const importEvent = recorder((_input: ImportEventInput) => okAsync(event));
+    const importEvent = recorder((input: ImportEventInput) => okAsync({ ...event, iCalUID: input.iCalUID }));
     const handlers = handlersWith({ importEvent: importEvent.fn });
 
-    await handlers.importEvent({ iCalUID: 'uid-1@example.com', summary: 'Imported', time: { kind: 'allDay', date: '2026-11-23' } });
+    expect(jsonOf(await handlers.importEvent({ iCalUID: 'uid-1@example.com', summary: 'Imported', time: { kind: 'allDay', date: '2026-11-23' } }))).toMatchObject({ iCalUID: 'uid-1@example.com' });
 
     expect(importEvent.calls[0]).toMatchObject({ iCalUID: 'uid-1@example.com', summary: 'Imported', start: { kind: 'date', date: '2026-11-23' }, end: { kind: 'date', date: '2026-11-24' } });
   });

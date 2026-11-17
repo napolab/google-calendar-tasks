@@ -1,4 +1,4 @@
-import { DEFAULT_TASK_LIST_ID, resolveTaskList } from '@napolab/gct-core/tasks';
+import { DEFAULT_TASK_LIST_ID, findTaskList, lookupTaskListByID, settleTaskListLookup } from '@napolab/gct-core/tasks';
 import { ResultAsync, ok as okResult, okAsync } from 'neverthrow';
 
 import { ok, toToolError } from '../tool-result';
@@ -48,14 +48,15 @@ import type {
 } from './input';
 import type { TaskPageView } from './view';
 import type { McpServer } from '@modelcontextprotocol/server';
-import type { ITasksService, MoveTaskInput, TaskListSummary, TaskMoveDestination } from '@napolab/gct-core/tasks';
+import type { ITasksService, MoveTaskInput, TaskListLookup, TaskListSummary, TaskMoveDestination } from '@napolab/gct-core/tasks';
 import type { Result } from 'neverthrow';
 
 // Google Tasks tools. Each handler: arguments → core input (./input) → `list` title / id → list id
-// (core resolveTaskList) → service call → normalized view (./view) → ToolResult.
+// (core findTaskList: one GET when it is an id, a title match over every list otherwise) → service call →
+// normalized view (./view) → ToolResult.
 
 // A title or id → the whole list (for tools that report which list they acted on).
-const resolveNamedTaskList = (tasks: ITasksService, name: string): ResultAsync<TaskListSummary, ToolError> => tasks.listTaskLists().andThen((lists) => resolveTaskList(lists, name));
+const resolveNamedTaskList = (tasks: ITasksService, name: string): ResultAsync<TaskListSummary, ToolError> => findTaskList(tasks, name);
 
 const resolveListTarget = (tasks: ITasksService, target: ListTarget): ResultAsync<string, ToolError> => {
   switch (target.kind) {
@@ -74,7 +75,7 @@ const resolveListTarget = (tasks: ITasksService, target: ListTarget): ResultAsyn
 const resolveTargeted = <T extends object>(tasks: ITasksService, targeted: Targeted<T>): ResultAsync<Omit<T, 'taskListId'> & { readonly taskListId: string }, ToolError> =>
   resolveListTarget(tasks, targeted.list).map((taskListId) => ({ ...targeted.input, taskListId }));
 
-// The whole list a target names: '@default' is read with tasks.get (its real id and title), a title / id is looked up.
+// The whole list a target names: '@default' is read with tasklists.get (its real id and title), a title / id is looked up.
 const resolveListSummary = (tasks: ITasksService, target: ListTarget): ResultAsync<TaskListSummary, ToolError> => {
   switch (target.kind) {
     case 'default':
@@ -88,32 +89,19 @@ const resolveListSummary = (tasks: ITasksService, target: ListTarget): ResultAsy
   }
 };
 
-// ---- move_task: the source and destination lists are resolved with at most one listTaskLists call ----
+// ---- move_task: each named list is read by id first; titles left over share one listTaskLists call ----
 
-const isNamed = (target: ListTarget): boolean => target.kind === 'named';
+// The source after its lookup: '@default' passes through as Google's alias, a name has been read by id.
+type SourceLookup = { readonly kind: 'alias' } | TaskListLookup;
 
-const targetsOf = (request: MoveTaskRequest): readonly ListTarget[] => {
-  switch (request.destination.kind) {
-    case 'sameList':
-      return [request.list];
-    case 'otherList':
-      return [request.list, request.destination.list];
-    default: {
-      const _exhaustive: never = request.destination;
-      throw new Error(`unhandled destination: ${JSON.stringify(_exhaustive)}`);
-    }
-  }
-};
+type DestinationLookup = { readonly kind: 'sameList' } | { readonly kind: 'otherList'; readonly lookup: TaskListLookup };
 
-const listsFor = (tasks: ITasksService, targets: readonly ListTarget[]): ResultAsync<readonly TaskListSummary[], ToolError> => (targets.some(isNamed) ? tasks.listTaskLists() : okAsync([]));
-
-// The source list id: '@default' is passed through as Google's alias.
-const sourceIdIn = (lists: readonly TaskListSummary[], target: ListTarget): Result<string, ToolError> => {
+const lookupSource = (tasks: ITasksService, target: ListTarget): ResultAsync<SourceLookup, ToolError> => {
   switch (target.kind) {
     case 'default':
-      return okResult(DEFAULT_TASK_LIST_ID);
+      return okAsync({ kind: 'alias' });
     case 'named':
-      return resolveTaskList(lists, target.name).map((list) => list.id);
+      return lookupTaskListByID(tasks, target.name);
     default: {
       const _exhaustive: never = target;
       throw new Error(`unhandled list target: ${JSON.stringify(_exhaustive)}`);
@@ -121,13 +109,13 @@ const sourceIdIn = (lists: readonly TaskListSummary[], target: ListTarget): Resu
   }
 };
 
-// The destination list id: '@default' is read as the default list's real id (destinationTasklist is not documented to take the alias).
-const destinationIdIn = (tasks: ITasksService, lists: readonly TaskListSummary[], target: ListTarget): ResultAsync<string, ToolError> => {
+// destinationTasklist is not documented to take '@default', so the default list is read for its real id.
+const destinationQuery = (target: ListTarget): string => {
   switch (target.kind) {
     case 'default':
-      return tasks.getTaskList({ taskListId: DEFAULT_TASK_LIST_ID }).map((list) => list.id);
+      return DEFAULT_TASK_LIST_ID;
     case 'named':
-      return resolveTaskList(lists, target.name).asyncAndThen((list) => okAsync(list.id));
+      return target.name;
     default: {
       const _exhaustive: never = target;
       throw new Error(`unhandled list target: ${JSON.stringify(_exhaustive)}`);
@@ -135,15 +123,12 @@ const destinationIdIn = (tasks: ITasksService, lists: readonly TaskListSummary[]
   }
 };
 
-// A destination that resolves to the source list is a move within it.
-const toMoveDestination = (sourceId: string, destinationId: string): TaskMoveDestination => (destinationId === sourceId ? { kind: 'sameList' } : { kind: 'otherList', taskListId: destinationId });
-
-const resolveDestination = (tasks: ITasksService, lists: readonly TaskListSummary[], sourceId: string, destination: MoveDestinationTarget): ResultAsync<TaskMoveDestination, ToolError> => {
+const lookupDestination = (tasks: ITasksService, destination: MoveDestinationTarget): ResultAsync<DestinationLookup, ToolError> => {
   switch (destination.kind) {
     case 'sameList':
       return okAsync({ kind: 'sameList' });
     case 'otherList':
-      return destinationIdIn(tasks, lists, destination.list).map((destinationId) => toMoveDestination(sourceId, destinationId));
+      return lookupTaskListByID(tasks, destinationQuery(destination.list)).map((lookup): DestinationLookup => ({ kind: 'otherList', lookup }));
     default: {
       const _exhaustive: never = destination;
       throw new Error(`unhandled destination: ${JSON.stringify(_exhaustive)}`);
@@ -151,12 +136,57 @@ const resolveDestination = (tasks: ITasksService, lists: readonly TaskListSummar
   }
 };
 
-const resolveMove = (tasks: ITasksService, request: MoveTaskRequest): ResultAsync<MoveTaskInput, ToolError> =>
-  listsFor(tasks, targetsOf(request)).andThen((lists) =>
-    sourceIdIn(lists, request.list).asyncAndThen((taskListId) =>
-      resolveDestination(tasks, lists, taskListId, request.destination).map((destination): MoveTaskInput => ({ ...request.input, taskListId, destination })),
-    ),
+const sourceNeedsTitles = (source: SourceLookup): boolean => source.kind === 'notAnID';
+
+const destinationNeedsTitles = (destination: DestinationLookup): boolean => destination.kind === 'otherList' && destination.lookup.kind === 'notAnID';
+
+// Every list, read only when a name was not an id.
+const listsFor = (tasks: ITasksService, needed: boolean): ResultAsync<readonly TaskListSummary[], ToolError> => (needed ? tasks.listTaskLists() : okAsync([]));
+
+const settleSource = (lists: readonly TaskListSummary[], source: SourceLookup): Result<string, ToolError> => {
+  switch (source.kind) {
+    case 'alias':
+      return okResult(DEFAULT_TASK_LIST_ID);
+    case 'found':
+    case 'notAnID':
+      return settleTaskListLookup(lists, source).map((list) => list.id);
+    default: {
+      const _exhaustive: never = source;
+      throw new Error(`unhandled source lookup: ${JSON.stringify(_exhaustive)}`);
+    }
+  }
+};
+
+// A destination that resolves to the source list is a move within it.
+const toMoveDestination = (sourceId: string, destinationId: string): TaskMoveDestination => (destinationId === sourceId ? { kind: 'sameList' } : { kind: 'otherList', taskListId: destinationId });
+
+const settleDestination = (lists: readonly TaskListSummary[], sourceId: string, destination: DestinationLookup): Result<TaskMoveDestination, ToolError> => {
+  switch (destination.kind) {
+    case 'sameList':
+      return okResult({ kind: 'sameList' });
+    case 'otherList':
+      return settleTaskListLookup(lists, destination.lookup).map((list) => toMoveDestination(sourceId, list.id));
+    default: {
+      const _exhaustive: never = destination;
+      throw new Error(`unhandled destination lookup: ${JSON.stringify(_exhaustive)}`);
+    }
+  }
+};
+
+type MoveLookups = { readonly source: SourceLookup; readonly destination: DestinationLookup };
+
+const lookupMove = (tasks: ITasksService, request: MoveTaskRequest): ResultAsync<MoveLookups, ToolError> =>
+  lookupSource(tasks, request.list).andThen((source) => lookupDestination(tasks, request.destination).map((destination) => ({ source, destination })));
+
+const needsTitles = (lookups: MoveLookups): boolean => sourceNeedsTitles(lookups.source) || destinationNeedsTitles(lookups.destination);
+
+const settleMove = (request: MoveTaskRequest, lists: readonly TaskListSummary[], lookups: MoveLookups): Result<MoveTaskInput, ToolError> =>
+  settleSource(lists, lookups.source).andThen((taskListId) =>
+    settleDestination(lists, taskListId, lookups.destination).map((destination): MoveTaskInput => ({ ...request.input, taskListId, destination })),
   );
+
+const resolveMove = (tasks: ITasksService, request: MoveTaskRequest): ResultAsync<MoveTaskInput, ToolError> =>
+  lookupMove(tasks, request).andThen((lookups) => listsFor(tasks, needsTitles(lookups)).andThen((lists) => settleMove(request, lists, lookups)));
 
 type ListGroup = TaskPageView & { readonly title: string };
 
@@ -187,7 +217,7 @@ const listTasksFor = (tasks: ITasksService, query: ListTasksQuery): ResultAsync<
 
 export const createTasksToolHandlers = (deps: ToolDeps) => {
   const { tasks } = deps.services;
-  const fail = toToolError(deps.connectURL);
+  const fail = toToolError(deps.connectURL, 'tasks');
 
   return {
     listTaskLists: (): Promise<ToolResult> =>
@@ -251,11 +281,7 @@ export const createTasksToolHandlers = (deps: ToolDeps) => {
         .andThen((ref) => tasks.deleteTask(ref).map(() => ({ deleted: true, taskListId: ref.taskListId, taskId: ref.taskId })))
         .match(ok, fail),
 
-    getTaskList: (args: GetTaskListArgs): Promise<ToolResult> =>
-      resolveListTarget(tasks, toGetTaskListTarget(args))
-        .andThen((taskListId) => tasks.getTaskList({ taskListId }))
-        .map(toTaskListView)
-        .match(ok, fail),
+    getTaskList: (args: GetTaskListArgs): Promise<ToolResult> => resolveListSummary(tasks, toGetTaskListTarget(args)).map(toTaskListView).match(ok, fail),
 
     createTaskList: (args: CreateTaskListArgs): Promise<ToolResult> =>
       toCreateTaskListInput(args)
@@ -294,7 +320,7 @@ export const registerTasksTools = (server: McpServer, deps: ToolDeps): void => {
     {
       title: 'List tasks',
       description:
-        "List tasks. Without list: EVERY list, grouped ({ lists: [{ taskListId, title, tasks, nextPageToken }] }). With list (id, title or '@default'): that list only. Completed tasks are included by default; deleted and assigned (Docs / Chat) tasks only with showDeleted / showAssigned. dueFrom / dueTo are inclusive YYYY-MM-DD days. updatedMin / completedMin / completedMax take RFC 3339 with an offset or YYYY-MM-DD (a day in Asia/Tokyo; completedMax's day is inclusive).",
+        "List tasks. Without list: EVERY list, grouped ({ lists: [{ taskListId, title, tasks, nextPageToken }] }). With list (id, title or '@default'): that list only. Completed tasks are included by default; deleted and assigned (Docs / Chat) tasks only with showDeleted / showAssigned. dueFrom / dueTo are inclusive YYYY-MM-DD days. updatedMin / completedMin / completedMax take RFC 3339 with an offset or YYYY-MM-DD (a day in Asia/Tokyo). updatedMin / completedMin are inclusive (a task at exactly that instant is listed); a completedMax day reaches the end of that day.",
       inputSchema: listTasksArgs,
       annotations: { readOnlyHint: true },
     },

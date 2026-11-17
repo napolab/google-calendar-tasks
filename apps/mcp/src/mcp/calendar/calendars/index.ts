@@ -121,7 +121,7 @@ export const toCalendarMetadataView = (calendar: Calendar): CalendarMetadataView
 
 export const createCalendarsToolHandlers = (deps: ToolDeps) => {
   const { calendar } = deps.services;
-  const fail = toToolError(deps.connectURL);
+  const fail = toToolError(deps.connectURL, 'calendars');
 
   return {
     getCalendar: (args: GetCalendarArgs): Promise<ToolResult> => calendar.getCalendar(calendarOf(args.calendarId)).map(toCalendarMetadataView).match(ok, fail),

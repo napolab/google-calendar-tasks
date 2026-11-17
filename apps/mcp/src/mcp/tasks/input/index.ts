@@ -27,7 +27,7 @@ import type {
 } from '@napolab/gct-core/tasks';
 
 // Tasks tool arguments (zod schemas) and their mapping to core inputs. `list` stays unresolved here: a title or id
-// is looked up by the handler (core resolveTaskList) once the arguments are valid. Same defaults as the CLI:
+// is looked up by the handler (core findTaskList: by id first, then by title) once the arguments are valid. Same defaults as the CLI:
 // every list when `list` is omitted, completed tasks included, 100 per list.
 
 const DEFAULT_PAGE_SIZE = 100;
@@ -50,9 +50,9 @@ export const listTasksArgs = z.strictObject({
     .enum(['exclude', 'include', 'includeHidden'])
     .optional()
     .describe("Completed tasks: 'exclude', 'include' (default), or 'includeHidden' (also tasks completed in Google's own apps, which Google hides)."),
-  completedMin: instantArg('Only tasks completed at or after this (a day: from its start). Needs completed tasks'),
-  completedMax: instantArg('Only tasks completed by this (a day: inclusive). Needs completed tasks'),
-  updatedMin: instantArg('Only tasks modified at or after this (a day: from its start)'),
+  completedMin: instantArg('Only tasks completed at or after this (inclusive; a day: from its start). Needs completed tasks'),
+  completedMax: instantArg('Upper bound on the completion time (a day: up to the end of that day). Needs completed tasks'),
+  updatedMin: instantArg('Only tasks modified at or after this (inclusive; a day: from its start)'),
   showDeleted: z.boolean().optional().describe('true also returns deleted tasks (deleted: true). Default: false.'),
   showAssigned: z.boolean().optional().describe('true also returns tasks assigned to the user from Google Docs / Chat spaces. Default: false.'),
   maxResults: z.number().int().min(1).max(100).optional().describe(`Tasks per list, 1-100. Default: ${DEFAULT_PAGE_SIZE}.`),

@@ -163,7 +163,7 @@ export const toCalendarListEntryView = (entry: CalendarListEntry): CalendarListE
 
 export const createCalendarListToolHandlers = (deps: ToolDeps) => {
   const { calendar } = deps.services;
-  const fail = toToolError(deps.connectURL);
+  const fail = toToolError(deps.connectURL, 'calendarList');
 
   return {
     getCalendarListEntry: (args: GetCalendarListEntryArgs): Promise<ToolResult> => calendar.getCalendarListEntry(calendarOf(args.calendarId)).map(toCalendarListEntryView).match(ok, fail),

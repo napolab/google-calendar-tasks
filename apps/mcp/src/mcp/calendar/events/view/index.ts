@@ -94,9 +94,13 @@ export type EventView =
       // The Google Meet link; null when the event has none.
       readonly hangoutLink: string | null;
       readonly conference: ConferenceView | null;
+      // The iCalendar UID (import_event's iCalUID); null when Google sent none.
+      readonly iCalUID: string | null;
       readonly updated: string;
     }
-  | { readonly id: string; readonly calendarId: string; readonly status: 'cancelled'; readonly recurrence: RecurrenceView };
+  // Google still answers 200 for a deleted event (and a list can carry cancelled occurrences of a series), so the
+  // stub says in words what `cancelled` means.
+  | { readonly id: string; readonly calendarId: string; readonly status: 'cancelled'; readonly deleted: true; readonly recurrence: RecurrenceView; readonly note: string };
 
 export type WindowView = { readonly from: string | null; readonly to: string | null };
 
@@ -214,10 +218,25 @@ const toConferenceView = (conference: Conference): ConferenceView | null => {
   }
 };
 
+const cancelledNote = (recurrence: Recurrence): string => {
+  switch (recurrence.kind) {
+    case 'single':
+      return 'This event was deleted. It no longer appears on the calendar; only its id remains.';
+    case 'series':
+      return 'This recurring event was deleted, with every occurrence. It no longer appears on the calendar; only its id remains.';
+    case 'instance':
+      return 'This occurrence of a recurring series was cancelled (deleted); the rest of the series (recurringEventId) is unchanged.';
+    default: {
+      const _exhaustive: never = recurrence;
+      throw new Error(`unhandled recurrence: ${JSON.stringify(_exhaustive)}`);
+    }
+  }
+};
+
 export const toEventView = (event: CalendarEvent): EventView => {
   switch (event.status) {
     case 'cancelled':
-      return { id: event.id, calendarId: event.calendarId, status: 'cancelled', recurrence: toRecurrenceView(event.recurrence) };
+      return { id: event.id, calendarId: event.calendarId, status: 'cancelled', deleted: true, recurrence: toRecurrenceView(event.recurrence), note: cancelledNote(event.recurrence) };
     case 'confirmed':
     case 'tentative':
       return {
@@ -240,6 +259,7 @@ export const toEventView = (event: CalendarEvent): EventView => {
         guestsCanSeeOtherGuests: event.guests.canSeeOtherGuests,
         hangoutLink: textOrNull(event.hangoutLink),
         conference: toConferenceView(event.conference),
+        iCalUID: textOrNull(event.iCalUID),
         updated: event.updated,
       };
     default: {

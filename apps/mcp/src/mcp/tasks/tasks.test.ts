@@ -1,3 +1,4 @@
+import { GoogleAPIError, GooglePermissionError } from '@napolab/gct-core/errors';
 import { errAsync, okAsync } from 'neverthrow';
 import { describe, expect, it } from 'vitest';
 
@@ -73,6 +74,8 @@ const calendar: ICalendarService = {
 
 const handlersWith = (overrides: Partial<ITasksService>) => {
   const calls: { method: string; input: unknown }[] = [];
+  // Task list lookups (tasklists.get / tasklists.list), kept apart from the operations in `calls`.
+  const lookups: string[] = [];
   const record =
     <I, R>(method: string, respond: (input: I) => R) =>
     (input: I): R => {
@@ -80,7 +83,16 @@ const handlersWith = (overrides: Partial<ITasksService>) => {
       return respond(input);
     };
   const tasks: ITasksService = {
-    listTaskLists: () => okAsync(LISTS),
+    listTaskLists: () => {
+      lookups.push('listTaskLists');
+      return okAsync(LISTS);
+    },
+    // Like Google: '@default' and the real ids are found; anything else (a title) is an invalid id.
+    getTaskList: (input: { taskListId: string }) => {
+      lookups.push(`getTaskList ${input.taskListId}`);
+      const list = LISTS.find((candidate) => candidate.id === (input.taskListId === '@default' ? 'l-default' : input.taskListId));
+      return list === undefined ? errAsync(new GoogleAPIError('Google API 400: Invalid task list ID', 400)) : okAsync(list);
+    },
     listTasks: record('listTasks', (input: { taskListId?: string }) => okAsync({ items: [task(input.taskListId ?? '@default')], next: { kind: 'last' } as const })),
     getTask: record('getTask', (input: { taskListId?: string; taskId: string }) => okAsync(task(input.taskListId ?? '@default', input.taskId))),
     createTask: record('createTask', (input: { taskListId?: string }) => okAsync(task(input.taskListId ?? '@default'))),
@@ -88,7 +100,6 @@ const handlersWith = (overrides: Partial<ITasksService>) => {
     completeTask: record('completeTask', (input: { taskListId?: string }) => okAsync({ ...task(input.taskListId ?? '@default'), status: 'completed' as const, completedAt: 'c' })),
     reopenTask: record('reopenTask', (input: { taskListId?: string }) => okAsync(task(input.taskListId ?? '@default'))),
     deleteTask: record('deleteTask', () => okAsync(undefined)),
-    getTaskList: record('getTaskList', (input: { taskListId: string }) => okAsync({ id: input.taskListId === '@default' ? 'l-default' : input.taskListId, title: 'Got', updated: 'u' })),
     moveTask: record('moveTask', (input: { taskId: string; taskListId?: string; destination: { kind: string; taskListId?: string } }) =>
       okAsync(task(input.destination.taskListId ?? input.taskListId ?? '@default', input.taskId)),
     ),
@@ -99,7 +110,7 @@ const handlersWith = (overrides: Partial<ITasksService>) => {
     ...overrides,
   };
   const deps: ToolDeps = { services: { calendar, tasks }, now: () => 0, connectURL: CONNECT_URL };
-  return { handlers: createTasksToolHandlers(deps), calls };
+  return { handlers: createTasksToolHandlers(deps), calls, lookups };
 };
 
 const jsonOf = (result: { content: { text: string }[]; isError?: boolean }): unknown => {
@@ -156,11 +167,27 @@ describe('tasks tools', () => {
     ]);
   });
 
-  it('list_tasks resolves a list title (case-insensitive) to its id', async () => {
-    const { handlers, calls } = handlersWith({});
+  it('list_tasks resolves a list title (case-insensitive) to its id, listing the lists only after the GET by id fails', async () => {
+    const { handlers, calls, lookups } = handlersWith({});
 
     expect(jsonOf(await handlers.listTasks({ list: 'work' }))).toMatchObject({ taskListId: 'l-work', nextPageToken: null });
     expect(calls[0]?.input).toMatchObject({ taskListId: 'l-work' });
+    expect(lookups).toEqual(['getTaskList work', 'listTaskLists']);
+  });
+
+  it('list_tasks reads a list id with exactly one lookup (GET by id, no listing)', async () => {
+    const { handlers, calls, lookups } = handlersWith({});
+
+    expect(jsonOf(await handlers.listTasks({ list: 'l-work' }))).toMatchObject({ taskListId: 'l-work' });
+    expect(calls[0]?.input).toMatchObject({ taskListId: 'l-work' });
+    expect(lookups).toEqual(['getTaskList l-work']);
+  });
+
+  it('propagates a lookup failure other than an invalid id without listing', async () => {
+    const { handlers, lookups } = handlersWith({ getTaskList: () => errAsync(new GooglePermissionError('Google API 403: Forbidden')) });
+
+    expect(errorTextOf(await handlers.getTask({ taskId: 't1', list: 'l-work' }))).toContain('403');
+    expect(lookups).toEqual([]);
   });
 
   it('names the available lists when the list does not exist', async () => {
@@ -174,10 +201,11 @@ describe('tasks tools', () => {
   });
 
   it('uses @default without a lookup', async () => {
-    const { handlers, calls } = handlersWith({ listTaskLists: unexpected });
+    const { handlers, calls, lookups } = handlersWith({ listTaskLists: unexpected, getTaskList: unexpected });
 
     expect(jsonOf(await handlers.createTask({ title: 'Buy milk' }))).toMatchObject({ taskListId: '@default' });
     expect(calls).toEqual([{ method: 'createTask', input: { title: 'Buy milk', notes: '', due: { kind: 'none' }, placement: { kind: 'root', position: { kind: 'first' } }, taskListId: '@default' } }]);
+    expect(lookups).toEqual([]);
   });
 
   it('update / complete / reopen / delete address the resolved list', async () => {
@@ -280,15 +308,13 @@ describe('tasks tools', () => {
     expect(calls).toEqual([{ method: 'getTask', input: { taskId: 't9', taskListId: 'l-work' } }]);
   });
 
-  it('get_task_list resolves a title to its id, and passes @default through without a lookup', async () => {
-    const { handlers, calls } = handlersWith({});
+  it('get_task_list reads an id or @default with one GET, and a title by listing after the GET by id fails', async () => {
+    const { handlers, lookups } = handlersWith({});
 
-    expect(jsonOf(await handlers.getTaskList({ list: 'work' }))).toEqual({ id: 'l-work', title: 'Got', updated: 'u' });
-    expect(jsonOf(await handlers.getTaskList({ list: '@default' }))).toEqual({ id: 'l-default', title: 'Got', updated: 'u' });
-    expect(calls).toEqual([
-      { method: 'getTaskList', input: { taskListId: 'l-work' } },
-      { method: 'getTaskList', input: { taskListId: '@default' } },
-    ]);
+    expect(jsonOf(await handlers.getTaskList({ list: 'l-work' }))).toEqual({ id: 'l-work', title: 'Work', updated: 'u' });
+    expect(jsonOf(await handlers.getTaskList({ list: '@default' }))).toEqual({ id: 'l-default', title: 'My Tasks', updated: 'u' });
+    expect(jsonOf(await handlers.getTaskList({ list: 'work' }))).toEqual({ id: 'l-work', title: 'Work', updated: 'u' });
+    expect(lookups).toEqual(['getTaskList l-work', 'getTaskList @default', 'getTaskList work', 'listTaskLists']);
   });
 
   it('move_task reorders / nests a task within its resolved list', async () => {
@@ -303,29 +329,23 @@ describe('tasks tools', () => {
     ]);
   });
 
-  it('move_task moves a task to another list named by title, looking the lists up once', async () => {
-    const lookups: string[] = [];
-    const { handlers, calls } = handlersWith({
-      listTaskLists: () => {
-        lookups.push('listTaskLists');
-        return okAsync(LISTS);
-      },
-    });
+  it('move_task moves a task to another list named by title, listing the lists once for both titles', async () => {
+    const { handlers, calls, lookups } = handlersWith({});
 
     expect(jsonOf(await handlers.moveTask({ taskId: 't1', list: 'My Tasks', destinationList: 'work' }))).toMatchObject({ taskListId: 'l-work' });
-    expect(lookups).toEqual(['listTaskLists']);
+    expect(lookups).toEqual(['getTaskList My Tasks', 'getTaskList work', 'listTaskLists']);
     expect(calls).toEqual([
       { method: 'moveTask', input: { taskId: 't1', taskListId: 'l-default', destination: { kind: 'otherList', taskListId: 'l-work' }, placement: { kind: 'root', position: { kind: 'first' } } } },
     ]);
   });
 
   it("move_task resolves a '@default' destination to the default list's real id", async () => {
-    const { handlers, calls } = handlersWith({});
+    const { handlers, calls, lookups } = handlersWith({});
 
-    jsonOf(await handlers.moveTask({ taskId: 't1', list: 'Work', destinationList: '@default' }));
+    jsonOf(await handlers.moveTask({ taskId: 't1', list: 'l-work', destinationList: '@default' }));
 
+    expect(lookups).toEqual(['getTaskList l-work', 'getTaskList @default']);
     expect(calls.map((call) => [call.method, call.input])).toEqual([
-      ['getTaskList', { taskListId: '@default' }],
       ['moveTask', { taskId: 't1', taskListId: 'l-work', destination: { kind: 'otherList', taskListId: 'l-default' }, placement: { kind: 'root', position: { kind: 'first' } } }],
     ]);
   });
@@ -356,10 +376,9 @@ describe('tasks tools', () => {
     const { handlers, calls } = handlersWith({});
 
     expect(jsonOf(await handlers.clearCompletedTasks({ list: 'Work', confirm: 'clear-completed' }))).toEqual({ cleared: true, taskList: { id: 'l-work', title: 'Work', updated: 'u' } });
-    expect(jsonOf(await handlers.clearCompletedTasks({ list: '@default', confirm: 'clear-completed' }))).toEqual({ cleared: true, taskList: { id: 'l-default', title: 'Got', updated: 'u' } });
+    expect(jsonOf(await handlers.clearCompletedTasks({ list: '@default', confirm: 'clear-completed' }))).toEqual({ cleared: true, taskList: { id: 'l-default', title: 'My Tasks', updated: 'u' } });
     expect(calls).toEqual([
       { method: 'clearCompletedTasks', input: { taskListId: 'l-work' } },
-      { method: 'getTaskList', input: { taskListId: '@default' } },
       { method: 'clearCompletedTasks', input: { taskListId: 'l-default' } },
     ]);
   });

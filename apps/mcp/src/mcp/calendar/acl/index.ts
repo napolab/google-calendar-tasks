@@ -91,7 +91,7 @@ export const toUpdateAclRuleInput = (args: UpdateCalendarAclRuleArgs): Result<Up
 
 export const createAclToolHandlers = (deps: ToolDeps) => {
   const { calendar } = deps.services;
-  const fail = toToolError(deps.connectURL);
+  const fail = toToolError(deps.connectURL, 'acl');
 
   return {
     listCalendarAcl: (args: ListCalendarAclArgs): Promise<ToolResult> =>

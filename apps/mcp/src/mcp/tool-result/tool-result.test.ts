@@ -27,14 +27,14 @@ describe('ok', () => {
 
 describe('toToolError', () => {
   it('tells the LLM to send the user to the connect page when Google is not connected', () => {
-    const result = toToolError(CONNECT_URL)(new GoogleNotConnectedError('not connected'));
+    const result = toToolError(CONNECT_URL, 'tasks')(new GoogleNotConnectedError('not connected'));
     expect(result.isError).toBe(true);
     expect(textOf(result)).toContain(CONNECT_URL);
     expect(textOf(result)).toMatch(/browser/);
   });
 
   it('asks for a reconnect when the authorization expired', () => {
-    const text = textOf(toToolError(CONNECT_URL)(new GoogleReconnectRequiredError('expired')));
+    const text = textOf(toToolError(CONNECT_URL, 'tasks')(new GoogleReconnectRequiredError('expired')));
     expect(text).toContain(CONNECT_URL);
     expect(text).toMatch(/again/);
   });
@@ -42,10 +42,10 @@ describe('toToolError', () => {
   it.each([
     ['another auth failure', new GoogleAuthError('Google API 401: Invalid Credentials'), CONNECT_URL],
     ['a permission failure', new GooglePermissionError('Google API 403: Forbidden'), CONNECT_URL],
-    ['a missing resource', new GoogleNotFoundError('Google API 404: Not Found'), 'list_'],
+    ['a missing resource', new GoogleNotFoundError('Google API 404: Not Found'), 'list_tasks'],
     ['a rate limit', new GoogleRateLimitError('Google API 429: Rate Limit Exceeded'), 'retry'],
   ])('keeps the message of %s and adds the next step', (_label, error, hint) => {
-    const text = textOf(toToolError(CONNECT_URL)(error));
+    const text = textOf(toToolError(CONNECT_URL, 'tasks')(error));
     expect(text).toContain(error.message);
     expect(text).toContain(hint);
   });
@@ -59,7 +59,7 @@ describe('toToolError', () => {
     ]),
     new GoogleAPIError('Google API 500: Backend Error', 500),
   ])('passes self-explaining messages through (%s)', (error) => {
-    const result = toToolError(CONNECT_URL)(error);
+    const result = toToolError(CONNECT_URL, 'tasks')(error);
     expect(result.isError).toBe(true);
     expect(textOf(result)).toContain(error.message);
   });

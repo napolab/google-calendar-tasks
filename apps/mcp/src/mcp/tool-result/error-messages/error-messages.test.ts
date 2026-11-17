@@ -2,13 +2,14 @@ import { GoogleAPIError, GoogleAuthError, GoogleNotFoundError, GooglePermissionE
 import { describe, expect, it } from 'vitest';
 
 import { GoogleNotConnectedError, GoogleReconnectRequiredError } from '../../../errors';
+import { MCP_TOOL_NAMES } from '../../server';
 import type { ToolError } from '../index';
 
-import { ERROR_MESSAGE_PLUGINS, authPlugin, describeToolError, notConnectedPlugin, notFoundPlugin, permissionPlugin, rateLimitPlugin, reconnectPlugin } from './index';
+import { ERROR_MESSAGE_PLUGINS, VALID_IDS_FROM, authPlugin, describeToolError, notConnectedPlugin, notFoundPlugin, permissionPlugin, rateLimitPlugin, reconnectPlugin } from './index';
 
 const CONNECT_URL = 'https://gct.example.com/google/connect';
 
-const context = (error: ToolError) => ({ error, connectURL: CONNECT_URL });
+const context = (error: ToolError) => ({ error, connectURL: CONNECT_URL, resource: 'events' as const });
 
 describe('error message plugins (each in isolation)', () => {
   it.each([
@@ -19,7 +20,7 @@ describe('error message plugins (each in isolation)', () => {
     ['not found', notFoundPlugin, new GoogleNotFoundError('Google API 404'), 'list_events'],
     ['rate limit', rateLimitPlugin, new GoogleRateLimitError('Google API 429'), 'retry'],
   ] as const)('%s handles its own error class', (_label, plugin, error, hint) => {
-    expect(plugin.run({ error, connectURL: CONNECT_URL })._unsafeUnwrap()).toContain(hint);
+    expect(plugin.run(context(error))._unsafeUnwrap()).toContain(hint);
   });
 
   it.each([notConnectedPlugin, reconnectPlugin, authPlugin, permissionPlugin, notFoundPlugin, rateLimitPlugin])('hands other errors on (%#)', (plugin) => {
@@ -28,15 +29,41 @@ describe('error message plugins (each in isolation)', () => {
   });
 });
 
+describe('notFoundPlugin hint per resource', () => {
+  it.each([
+    ['events', ['list_events', 'list_calendars'], ['list_tasks', 'list_settings']],
+    ['calendars', ['list_calendars'], ['list_tasks', 'list_events']],
+    ['calendarList', ['list_calendars'], ['list_tasks', 'list_events']],
+    ['acl', ['list_calendar_acl', 'list_calendars'], ['list_tasks', 'list_events']],
+    ['settings', ['list_settings'], ['list_calendars', 'list_tasks', 'list_events']],
+    ['tasks', ['list_task_lists', 'list_tasks'], ['list_calendars', 'list_events']],
+  ] as const)('%s points at its own list tool only', (resource, expected, unexpected) => {
+    const text = notFoundPlugin.run({ error: new GoogleNotFoundError('Google API 404: Not Found'), connectURL: CONNECT_URL, resource })._unsafeUnwrap();
+    expect(text).toContain('Google API 404: Not Found');
+    for (const tool of expected) expect(text).toContain(tool);
+    for (const tool of unexpected) expect(text).not.toContain(tool);
+  });
+});
+
+// Cross-module sync (.claude/rules/cross-module-sync-test.md): every tool a hint names must be a registered tool.
+describe('VALID_IDS_FROM ↔ MCP_TOOL_NAMES', () => {
+  it.each(Object.entries(VALID_IDS_FROM))('the %s hint names only registered tools', (_resource, hint) => {
+    const named = hint.match(/\blist_[a-z_]+/g) ?? [];
+    expect(named.length).toBeGreaterThan(0);
+    const registered: readonly string[] = MCP_TOOL_NAMES;
+    for (const tool of named) expect(registered).toContain(tool);
+  });
+});
+
 describe('describeToolError (registry order)', () => {
   it('lists the GoogleAuthError subclasses before GoogleAuthError so they are not shadowed', () => {
     const order: readonly unknown[] = ERROR_MESSAGE_PLUGINS;
     expect(order.indexOf(notConnectedPlugin)).toBeLessThan(order.indexOf(authPlugin));
     expect(order.indexOf(reconnectPlugin)).toBeLessThan(order.indexOf(authPlugin));
-    expect(describeToolError(new GoogleNotConnectedError('x'), CONNECT_URL)).toMatch(/not connected/);
+    expect(describeToolError(context(new GoogleNotConnectedError('x')))).toMatch(/not connected/);
   });
 
   it('falls back to the error message itself', () => {
-    expect(describeToolError(new GoogleAPIError('Google API 500: Backend Error', 500), CONNECT_URL)).toBe('Google API 500: Backend Error');
+    expect(describeToolError(context(new GoogleAPIError('Google API 500: Backend Error', 500)))).toBe('Google API 500: Backend Error');
   });
 });

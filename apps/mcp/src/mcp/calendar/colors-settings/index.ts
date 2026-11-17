@@ -17,7 +17,7 @@ export type GetSettingArgs = z.output<typeof getSettingArgs>;
 
 export const createColorsSettingsToolHandlers = (deps: ToolDeps) => {
   const { calendar } = deps.services;
-  const fail = toToolError(deps.connectURL);
+  const fail = toToolError(deps.connectURL, 'settings');
 
   return {
     getColors: (): Promise<ToolResult> => calendar.getColors().match(ok, fail),

@@ -60,6 +60,9 @@ const windowBound = (edge: 'start' | 'end', fallback: string) =>
 
 const maxResultsArg = z.number().int().min(1).max(2500).optional().describe(`Events per page, 1-2500. Default: ${DEFAULT_PAGE_SIZE}.`);
 
+// Google behaviour seen on real events: guestsCanModify implies the other two, which Google then leaves out of the event.
+export const GUESTS_MODIFY_NOTE =
+  'When guestsCanModify is true, Google implies the other two permissions and omits guestsCanInviteOthers / guestsCanSeeOtherGuests from its response, so they read back as true.';
 export const eventTimeArg = z
   .discriminatedUnion('kind', [
     z.strictObject({
@@ -154,9 +157,9 @@ const eventDetailsShape = {
   colorId: colorIdArg.optional().describe("Default: the calendar's color."),
   visibility: visibilityArg.optional().describe("Default: 'default' ('public' for a workingLocation event)."),
   transparency: transparencyArg.optional().describe("Default: 'opaque' ('transparent' for a workingLocation event)."),
-  guestsCanModify: z.boolean().optional().describe('Guests may edit the event. Default false.'),
-  guestsCanInviteOthers: z.boolean().optional().describe('Guests may invite others. Default true.'),
-  guestsCanSeeOtherGuests: z.boolean().optional().describe('Guests see the guest list. Default true.'),
+  guestsCanModify: z.boolean().optional().describe(`Guests may edit the event. Default false. ${GUESTS_MODIFY_NOTE}`),
+  guestsCanInviteOthers: z.boolean().optional().describe(`Guests may invite others. Default true. ${GUESTS_MODIFY_NOTE}`),
+  guestsCanSeeOtherGuests: z.boolean().optional().describe(`Guests see the guest list. Default true. ${GUESTS_MODIFY_NOTE}`),
 };
 
 export const listEventsArgs = z.strictObject({
@@ -211,9 +214,9 @@ export const updateEventArgs = z.strictObject({
   clearColor: z.boolean().optional().describe("true returns to the calendar's color."),
   visibility: visibilityArg.optional().describe('Omit to keep.'),
   transparency: transparencyArg.optional().describe('Omit to keep.'),
-  guestsCanModify: z.boolean().optional().describe('Omit to keep.'),
-  guestsCanInviteOthers: z.boolean().optional().describe('Omit to keep.'),
-  guestsCanSeeOtherGuests: z.boolean().optional().describe('Omit to keep.'),
+  guestsCanModify: z.boolean().optional().describe(`Omit to keep. ${GUESTS_MODIFY_NOTE}`),
+  guestsCanInviteOthers: z.boolean().optional().describe(`Omit to keep. ${GUESTS_MODIFY_NOTE}`),
+  guestsCanSeeOtherGuests: z.boolean().optional().describe(`Omit to keep. ${GUESTS_MODIFY_NOTE}`),
   addGoogleMeet: z.boolean().optional().describe('true adds a new Google Meet link.'),
   removeConference: z.boolean().optional().describe('true removes the Meet / conference from the event.'),
   eventTypeProperties: eventTypePropertiesArg.optional(),
