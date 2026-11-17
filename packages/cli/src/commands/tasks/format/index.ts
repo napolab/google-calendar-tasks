@@ -1,9 +1,10 @@
-import { orderTasksHierarchically, resolveTaskList } from '@napolab/gct-core/tasks';
+import { boardStatusOf, orderTasksHierarchically, resolveTaskList } from '@napolab/gct-core/tasks';
 
 import type { TaskListTasks } from '../all-lists';
 import type { OrderedTask, Task, TaskDue, TaskHierarchy, TaskListSummary, TaskPage, TaskPageCursor } from '@napolab/gct-core/tasks';
 
-// Human-readable task output: `[ ] title  (due YYYY-MM-DD)  [id]`, subtasks indented, completed ones checked.
+// Human-readable task output: `[ ] title  (due YYYY-MM-DD)  [id]`, subtasks indented, completed ones checked; an open task
+// in the board's doing column (first-line `[status: doing]` notes tag) is marked `[doing]`.
 // Listings are in outline order (each parent followed by its subtasks, two spaces per level).
 
 const checkbox = (task: Task): string => {
@@ -45,7 +46,9 @@ const dueSuffix = (due: TaskDue): string => {
   }
 };
 
-const taskText = (task: Task): string => `${checkbox(task)} ${task.title === '' ? '(no title)' : task.title}${dueSuffix(task.due)}  [${task.id}]`;
+const doingMark = (task: Task): string => (boardStatusOf(task) === 'doing' ? '  [doing]' : '');
+
+const taskText = (task: Task): string => `${checkbox(task)} ${task.title === '' ? '(no title)' : task.title}${doingMark(task)}${dueSuffix(task.due)}  [${task.id}]`;
 
 // One task on its own (add / update / complete / reopen): a subtask is indented once.
 export const formatTaskLine = (task: Task): string => `${indent(task.hierarchy)}${taskText(task)}`;

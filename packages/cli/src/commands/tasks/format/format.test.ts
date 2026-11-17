@@ -32,6 +32,11 @@ describe('formatTaskLine', () => {
   it('checks a completed task, indents a subtask and names an untitled one', () => {
     expect(formatTaskLine(DONE)).toBe('  [x] (no title)  [t2]');
   });
+
+  it('marks an open task whose notes tag it [status: doing]', () => {
+    expect(formatTaskLine({ ...OPEN, notes: '[status: doing]\nhalf done' })).toBe('[ ] Buy milk  [doing]  (due 2026-11-20)  [t1]');
+    expect(formatTaskLine({ ...DONE, notes: '[status: doing]' })).toBe('  [x] (no title)  [t2]');
+  });
 });
 
 describe('formatTaskPage', () => {
