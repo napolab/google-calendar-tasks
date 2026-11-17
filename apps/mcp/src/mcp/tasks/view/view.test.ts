@@ -28,7 +28,10 @@ describe('toTaskView', () => {
       taskListId: 'l1',
       title: 'Buy milk',
       notes: '',
+      body: '',
       status: 'needsAction',
+      boardStatus: 'todo',
+      unknownStatusTag: null,
       due: '2026-11-20',
       parentId: 'p1',
       completedAt: null,
@@ -60,6 +63,15 @@ describe('toTaskView', () => {
   it('shows when a completed root task without due date was completed', () => {
     const completed: Task = { ...open, status: 'completed', completedAt: '2026-11-18T00:00:00Z', due: { kind: 'none' }, hierarchy: { kind: 'root' } };
     expect(toTaskView(completed)).toMatchObject({ status: 'completed', completedAt: '2026-11-18T00:00:00Z', due: null, parentId: null });
+  });
+
+  it('derives the board column from the status tag and shows the notes body without the tag line', () => {
+    expect(toTaskView({ ...open, notes: '[status: doing]\ncall Bob' })).toMatchObject({ notes: '[status: doing]\ncall Bob', body: 'call Bob', boardStatus: 'doing', unknownStatusTag: null });
+    expect(toTaskView({ ...open, status: 'completed', completedAt: 'c', notes: '[status: doing]' })).toMatchObject({ boardStatus: 'done', body: '' });
+  });
+
+  it('reports an unrecognized status tag value (the task stays in todo)', () => {
+    expect(toTaskView({ ...open, notes: '[status: blocked]\nwaiting' })).toMatchObject({ body: 'waiting', boardStatus: 'todo', unknownStatusTag: 'blocked' });
   });
 });
 

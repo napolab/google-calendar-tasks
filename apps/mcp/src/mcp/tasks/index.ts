@@ -1,4 +1,4 @@
-import { DEFAULT_TASK_LIST_ID, findTaskList, lookupTaskListByID, settleTaskListLookup } from '@napolab/gct-core/tasks';
+import { DEFAULT_TASK_LIST_ID, findTaskList, lookupTaskListByID, setTaskBoardStatus, settleTaskListLookup } from '@napolab/gct-core/tasks';
 import { ResultAsync, ok as okResult, okAsync } from 'neverthrow';
 
 import { ok, toToolError } from '../tool-result';
@@ -11,6 +11,7 @@ import {
   listTasksArgs,
   moveTaskArgs,
   renameTaskListArgs,
+  setTaskStatusArgs,
   taskRefArgs,
   toClearTaskListTarget,
   toCreateTaskInput,
@@ -21,6 +22,7 @@ import {
   toMoveTaskRequest,
   toRenameTaskListInput,
   toTaskRef,
+  toTaskStatusChange,
   toUpdateTaskInput,
   updateTaskArgs,
 } from './input';
@@ -42,6 +44,7 @@ import type {
   MoveTaskArgs,
   MoveTaskRequest,
   RenameTaskListArgs,
+  SetTaskStatusArgs,
   TaskRefArgs,
   Targeted,
   UpdateTaskArgs,
@@ -76,7 +79,7 @@ const resolveTargeted = <T extends object>(tasks: ITasksService, targeted: Targe
   resolveListTarget(tasks, targeted.list).map((taskListId) => ({ ...targeted.input, taskListId }));
 
 // The whole list a target names: '@default' is read with tasklists.get (its real id and title), a title / id is looked up.
-const resolveListSummary = (tasks: ITasksService, target: ListTarget): ResultAsync<TaskListSummary, ToolError> => {
+export const resolveListSummary = (tasks: ITasksService, target: ListTarget): ResultAsync<TaskListSummary, ToolError> => {
   switch (target.kind) {
     case 'default':
       return tasks.getTaskList({ taskListId: DEFAULT_TASK_LIST_ID });
@@ -189,7 +192,7 @@ const resolveMove = (tasks: ITasksService, request: MoveTaskRequest): ResultAsyn
   lookupMove(tasks, request).andThen((lookups) => listsFor(tasks, needsTitles(lookups)).andThen((lists) => settleMove(request, lists, lookups)));
 
 // list_tasks always answers `{ lists }`: one entry per list read (exactly one when `list` is given).
-type TasksListing = { readonly lists: readonly TaskListPageView[] };
+export type TasksListing = { readonly lists: readonly TaskListPageView[] };
 
 const listPage =
   (tasks: ITasksService, options: ListTasksOptions, page: TaskPageRequest) =>
@@ -216,6 +219,9 @@ const listTasksFor = (tasks: ITasksService, query: ListTasksQuery): ResultAsync<
   }
 };
 
+// list_tasks' read, also used by show_task_board (task-board): arguments → query → every list (or one) with its tasks.
+export const readTasksListing = (tasks: ITasksService, args: ListTasksArgs): ResultAsync<TasksListing, ToolError> => toListTasksQuery(args).asyncAndThen((query) => listTasksFor(tasks, query));
+
 export const createTasksToolHandlers = (deps: ToolDeps) => {
   const { tasks } = deps.services;
   const fail = toToolError(deps.connectURL, 'tasks');
@@ -227,10 +233,7 @@ export const createTasksToolHandlers = (deps: ToolDeps) => {
         .map((lists) => ({ taskLists: lists.map(toTaskListView) }))
         .match(ok, fail),
 
-    listTasks: (args: ListTasksArgs): Promise<ToolResult> =>
-      toListTasksQuery(args)
-        .asyncAndThen((query) => listTasksFor(tasks, query))
-        .match(ok, fail),
+    listTasks: (args: ListTasksArgs): Promise<ToolResult> => readTasksListing(tasks, args).match(ok, fail),
 
     createTask: (args: CreateTaskArgs): Promise<ToolResult> =>
       toCreateTaskInput(args)
@@ -257,6 +260,14 @@ export const createTasksToolHandlers = (deps: ToolDeps) => {
         .andThen((ref) => tasks.reopenTask(ref))
         .map(toTaskView)
         .match(ok, fail),
+
+    setTaskStatus: (args: SetTaskStatusArgs): Promise<ToolResult> => {
+      const change = toTaskStatusChange(args);
+      return resolveTargeted(tasks, change.ref)
+        .andThen((ref) => setTaskBoardStatus(tasks, ref, change.status))
+        .map(toTaskView)
+        .match(ok, fail);
+    },
 
     getTask: (args: TaskRefArgs): Promise<ToolResult> =>
       resolveTargeted(tasks, toTaskRef(args))
@@ -307,6 +318,10 @@ export const createTasksToolHandlers = (deps: ToolDeps) => {
 
 const LIST_HELP = "list is a task list id or title (from list_task_lists) or '@default'; default: the user's default list.";
 
+// The status-tag template (core tasks/status-tag), quoted in every tool that reads or writes notes.
+const STATUS_TAG_HELP =
+  "Board status: the FIRST line of notes may be a tag '[status: todo]', '[status: doing]' or '[status: done]'; the rest is the body. Each task carries notes (raw, tag included), body (without the tag line), boardStatus (todo / doing / done: done whenever the task is completed, else the tag; no or unknown tag = todo) and unknownStatusTag (an unrecognized tag value, else null). Change the column with set_task_status, not by editing notes.";
+
 export const registerTasksTools = (server: McpServer, deps: ToolDeps): void => {
   const handlers = createTasksToolHandlers(deps);
 
@@ -320,8 +335,7 @@ export const registerTasksTools = (server: McpServer, deps: ToolDeps): void => {
     'list_tasks',
     {
       title: 'List tasks',
-      description:
-        "List tasks. Always returns { lists: [{ taskListId, title, tasks, nextPageToken }] }: without list, one entry per task list (EVERY list); with list (id, title or '@default'), exactly one entry for that list (its real id, even for '@default'). Within a page, tasks are in outline order: each top-level task (by position) is followed by its subtasks; each task carries parentId and depth (0 = top level, 1 = subtask of the task above). A subtask whose parent is on another page or filtered out comes after the top-level tasks with depth 0 and a non-null parentId. Completed tasks are included by default; deleted and assigned (Docs / Chat) tasks only with showDeleted / showAssigned. dueFrom / dueTo are inclusive YYYY-MM-DD days. updatedMin / completedMin / completedMax take RFC 3339 with an offset or YYYY-MM-DD (a day in Asia/Tokyo). updatedMin / completedMin are inclusive (a task at exactly that instant is listed); a completedMax day reaches the end of that day.",
+      description: `List tasks. Always returns { lists: [{ taskListId, title, tasks, nextPageToken }] }: without list, one entry per task list (EVERY list); with list (id, title or '@default'), exactly one entry for that list (its real id, even for '@default'). Within a page, tasks are in outline order: each top-level task (by position) is followed by its subtasks; each task carries parentId and depth (0 = top level, 1 = subtask of the task above). ${STATUS_TAG_HELP} A subtask whose parent is on another page or filtered out comes after the top-level tasks with depth 0 and a non-null parentId. Completed tasks are included by default; deleted and assigned (Docs / Chat) tasks only with showDeleted / showAssigned. dueFrom / dueTo are inclusive YYYY-MM-DD days. updatedMin / completedMin / completedMax take RFC 3339 with an offset or YYYY-MM-DD (a day in Asia/Tokyo). updatedMin / completedMin are inclusive (a task at exactly that instant is listed); a completedMax day reaches the end of that day.`,
       inputSchema: listTasksArgs,
       annotations: { readOnlyHint: true },
     },
@@ -332,7 +346,7 @@ export const registerTasksTools = (server: McpServer, deps: ToolDeps): void => {
     'get_task',
     {
       title: 'Get task',
-      description: `Get one task by id with its notes, due day, parent, position, links, deleted / hidden flags and assignment source. ${LIST_HELP}`,
+      description: `Get one task by id with its notes, due day, parent, position, links, deleted / hidden flags and assignment source. ${STATUS_TAG_HELP} ${LIST_HELP}`,
       inputSchema: taskRefArgs,
       annotations: { readOnlyHint: true },
     },
@@ -343,7 +357,7 @@ export const registerTasksTools = (server: McpServer, deps: ToolDeps): void => {
     'create_task',
     {
       title: 'Create task',
-      description: `Create a task. due is a day (YYYY-MM-DD; Google Tasks has no due time). parentId makes it a subtask; previousId places it after a sibling. ${LIST_HELP}`,
+      description: `Create a task. due is a day (YYYY-MM-DD; Google Tasks has no due time). parentId makes it a subtask; previousId places it after a sibling. status ('todo' / 'doing') writes the board status tag as the first line of the notes. ${LIST_HELP}`,
       inputSchema: createTaskArgs,
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
     },
@@ -354,7 +368,7 @@ export const registerTasksTools = (server: McpServer, deps: ToolDeps): void => {
     'update_task',
     {
       title: 'Update task',
-      description: `Change a task's title, notes or due day. Omitted fields are kept; remove notes / due with clearNotes / clearDue: true (never an empty string). Use complete_task / reopen_task for the status. ${LIST_HELP}`,
+      description: `Change a task's title, notes or due day. Omitted fields are kept; remove notes / due with clearNotes / clearDue: true (never an empty string). notes replaces the RAW notes: keep the first-line '[status: …]' tag when the task has one (copy it from get_task's notes), or the task drops back to todo on the board. Use set_task_status (or complete_task / reopen_task) for the status. ${LIST_HELP}`,
       inputSchema: updateTaskArgs,
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
     },
@@ -376,6 +390,17 @@ export const registerTasksTools = (server: McpServer, deps: ToolDeps): void => {
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
     },
     handlers.reopenTask,
+  );
+
+  server.registerTool(
+    'set_task_status',
+    {
+      title: 'Set task board status',
+      description: `Move a task to a board column. 'done' completes the task and rewrites the first line of its notes to '[status: done]'; 'todo' / 'doing' reopen it (if completed) and write '[status: todo]' / '[status: doing]'. The rest of the notes is kept as is. Returns the task with its boardStatus. ${LIST_HELP}`,
+      inputSchema: setTaskStatusArgs,
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
+    },
+    handlers.setTaskStatus,
   );
 
   server.registerTool(

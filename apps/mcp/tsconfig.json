@@ -17,5 +17,7 @@
     "jsx": "react-jsx",
     "jsxImportSource": "hono/jsx"
   },
-  "include": ["src/**/*.ts", "src/**/*.tsx", "cloudflare.config.ts", "vite.config.ts", "vitest.config.ts", ".cloudflare/types/index.d.ts"]
+  "include": ["src/**/*.ts", "src/**/*.tsx", "cloudflare.config.ts", "vite.config.ts", "vite/**/*.ts", "vitest.config.ts", ".cloudflare/types/index.d.ts"],
+  // The board UI runs in the browser (DOM lib): checked by tsconfig.ui.json.
+  "exclude": ["src/task-board-ui/**"]
 }

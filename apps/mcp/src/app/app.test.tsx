@@ -88,7 +88,7 @@ const setup = (options: { grantedScope?: string; refresh?: RefreshOutcome; verif
     ...options.env,
   };
   const verify: VerifyAccessToken = options.verify ?? ((token) => (token === 'valid' ? okAsync({ email: EMAIL }) : errAsync(new InvalidAccessAssertion('bad'))));
-  const app = createApp({ verifyAccess: verify, fetch: google.fetch, now });
+  const app = createApp({ verifyAccess: verify, fetch: google.fetch, now, mcpAppAssets: { taskBoard: { html: '<!doctype html>' } } });
   const request = (path: string, init: RequestInit = {}) => app.request(path, { ...init, headers: { [ACCESS_ASSERTION_HEADER]: 'valid', ...init.headers } }, env);
   return { app, env, request, google, stores, clock };
 };

@@ -13,6 +13,7 @@ import { renderPage } from './render-page';
 
 import type { VerifyAccessToken } from '../access-auth';
 import type { HonoEnv } from '../hono-env';
+import type { McpAppAssets } from '../mcp/server';
 import type { Fetch } from '@napolab/gct-core/google-client';
 import type { Now } from '@napolab/gct-core/oauth';
 
@@ -23,6 +24,8 @@ export type AppDeps = {
   readonly verifyAccess: VerifyAccessToken;
   readonly fetch: Fetch;
   readonly now: Now;
+  // MCP App HTML bundled into the Worker (src/index.ts imports it from the build).
+  readonly mcpAppAssets: McpAppAssets;
 };
 
 const UnavailablePage = () => (
@@ -55,7 +58,7 @@ export const createApp = (deps: AppDeps) => {
       ),
     )
     .route('/google', createGoogleRoutes(deps))
-    .on(['GET', 'POST', 'DELETE'], '/mcp', (c) => serveMCP(c.req.raw, { services: c.var.services, now: deps.now, connectURL: new URL('/google/connect', c.req.url).href }));
+    .on(['GET', 'POST', 'DELETE'], '/mcp', (c) => serveMCP(c.req.raw, { services: c.var.services, now: deps.now, connectURL: new URL('/google/connect', c.req.url).href }, deps.mcpAppAssets));
 };
 
 export type AppType = ReturnType<typeof createApp>;

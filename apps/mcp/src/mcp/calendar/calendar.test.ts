@@ -61,10 +61,12 @@ const rpc = (body: unknown): Request =>
     body: JSON.stringify(body),
   });
 
+const ASSETS = { taskBoard: { html: '' } };
+
 const callResultSchema = z.object({ result: z.object({ isError: z.boolean().optional(), content: z.array(z.object({ text: z.string() })) }) });
 
 const listTools = async () => {
-  const response = await serveMCP(rpc({ jsonrpc: '2.0', id: 1, method: 'tools/list', params: {} }), depsWith({}));
+  const response = await serveMCP(rpc({ jsonrpc: '2.0', id: 1, method: 'tools/list', params: {} }), depsWith({}), ASSETS);
   return toolsSchema.parse(await response.json()).result.tools;
 };
 
@@ -97,7 +99,7 @@ describe('clear_calendar confirmation', () => {
     const calls: unknown[] = [];
     const deps = depsWith({ clearPrimaryCalendar: () => (calls.push('clear'), okAsync(undefined)) });
 
-    const response = await serveMCP(rpc({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'clear_calendar', arguments: args } }), deps);
+    const response = await serveMCP(rpc({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'clear_calendar', arguments: args } }), deps, ASSETS);
     const body = callResultSchema.parse(await response.json());
 
     expect(body.result.isError).toBe(true);
@@ -108,7 +110,7 @@ describe('clear_calendar confirmation', () => {
     const calls: unknown[] = [];
     const deps = depsWith({ clearPrimaryCalendar: () => (calls.push('clear'), okAsync(undefined)) });
 
-    const response = await serveMCP(rpc({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'clear_calendar', arguments: { confirm: 'delete-all-events' } } }), deps);
+    const response = await serveMCP(rpc({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'clear_calendar', arguments: { confirm: 'delete-all-events' } } }), deps, ASSETS);
 
     expect(callResultSchema.parse(await response.json()).result.isError).toBeUndefined();
     expect(calls).toEqual(['clear']);

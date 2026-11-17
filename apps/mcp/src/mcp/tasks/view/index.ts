@@ -1,6 +1,19 @@
-import { orderTasksHierarchically } from '@napolab/gct-core/tasks';
+import { boardStatusOf, orderTasksHierarchically, parseStatusTag } from '@napolab/gct-core/tasks';
 
-import type { OrderedTask, Task, TaskAssignment, TaskAssignmentSource, TaskDue, TaskHierarchy, TaskLink, TaskListSummary, TaskPage, TaskPageCursor } from '@napolab/gct-core/tasks';
+import type {
+  OrderedTask,
+  ParsedStatusTag,
+  Task,
+  TaskBoardStatus,
+  TaskAssignment,
+  TaskAssignmentSource,
+  TaskDue,
+  TaskHierarchy,
+  TaskLink,
+  TaskListSummary,
+  TaskPage,
+  TaskPageCursor,
+} from '@napolab/gct-core/tasks';
 
 // Read side: tasks shaped for an LLM (ids always present, dates as YYYY-MM-DD, absent values as null; output only).
 
@@ -8,8 +21,15 @@ export type TaskView = {
   readonly id: string;
   readonly taskListId: string;
   readonly title: string;
+  // Raw notes, including the first-line `[status: …]` tag when there is one.
   readonly notes: string;
+  // The notes without the status tag line.
+  readonly body: string;
   readonly status: 'needsAction' | 'completed';
+  // Board column (todo / doing / done): `done` when completed, else the status tag (no / unknown tag → todo).
+  readonly boardStatus: TaskBoardStatus;
+  // The value of a status tag line that is not todo / doing / done; null otherwise.
+  readonly unknownStatusTag: string | null;
   readonly due: string | null;
   readonly parentId: string | null;
   readonly completedAt: string | null;
@@ -88,22 +108,42 @@ const assignmentOf = (assignment: TaskAssignment): TaskView['assignment'] => {
   }
 };
 
-export const toTaskView = (task: Task): TaskView => ({
-  id: task.id,
-  taskListId: task.taskListId,
-  title: task.title,
-  notes: task.notes,
-  status: task.status,
-  due: dueOf(task.due),
-  parentId: parentOf(task.hierarchy),
-  completedAt: completedAtOf(task),
-  position: task.position,
-  updated: task.updated,
-  deleted: task.deleted,
-  hidden: task.hidden,
-  links: task.links,
-  assignment: assignmentOf(task.assignment),
-});
+const unknownTagOf = (tag: ParsedStatusTag): string | null => {
+  switch (tag.kind) {
+    case 'none':
+    case 'tagged':
+      return null;
+    case 'unknown':
+      return tag.value;
+    default: {
+      const _exhaustive: never = tag;
+      throw new Error(`unhandled status tag: ${JSON.stringify(_exhaustive)}`);
+    }
+  }
+};
+
+export const toTaskView = (task: Task): TaskView => {
+  const tag = parseStatusTag(task.notes);
+  return {
+    id: task.id,
+    taskListId: task.taskListId,
+    title: task.title,
+    notes: task.notes,
+    body: tag.body,
+    status: task.status,
+    boardStatus: boardStatusOf(task),
+    unknownStatusTag: unknownTagOf(tag),
+    due: dueOf(task.due),
+    parentId: parentOf(task.hierarchy),
+    completedAt: completedAtOf(task),
+    position: task.position,
+    updated: task.updated,
+    deleted: task.deleted,
+    hidden: task.hidden,
+    links: task.links,
+    assignment: assignmentOf(task.assignment),
+  };
+};
 
 export const toTaskListView = (list: TaskListSummary): TaskListView => ({ id: list.id, title: list.title, updated: list.updated });
 

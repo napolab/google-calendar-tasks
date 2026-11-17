@@ -1,0 +1,10 @@
+{
+  // The task board MCP App (browser code, bundled by vite/task-board-ui.ts).
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "lib": ["es2023", "dom", "dom.iterable"],
+    "types": ["vite/client"]
+  },
+  "include": ["src/task-board-ui/**/*.ts"],
+  "exclude": []
+}

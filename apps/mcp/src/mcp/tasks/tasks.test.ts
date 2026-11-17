@@ -255,6 +255,54 @@ describe('tasks tools', () => {
     ]);
   });
 
+  it('set_task_status doing reopens the task in the resolved list and tags its notes', async () => {
+    const { handlers, calls } = handlersWith({
+      reopenTask: (input) => {
+        calls.push({ method: 'reopenTask', input });
+        return okAsync({ ...task('l-work'), notes: 'call Bob' });
+      },
+      updateTask: (input) => {
+        calls.push({ method: 'updateTask', input });
+        return okAsync({ ...task('l-work'), notes: input.notes.kind === 'set' ? input.notes.value : '' });
+      },
+    });
+
+    expect(jsonOf(await handlers.setTaskStatus({ taskId: 't1', list: 'Work', status: 'doing' }))).toMatchObject({
+      boardStatus: 'doing',
+      body: 'call Bob',
+      notes: '[status: doing]\ncall Bob',
+    });
+    expect(calls.map((call) => [call.method, call.input])).toEqual([
+      ['reopenTask', { taskId: 't1', taskListId: 'l-work' }],
+      ['updateTask', { taskId: 't1', taskListId: 'l-work', title: { kind: 'keep' }, notes: { kind: 'set', value: '[status: doing]\ncall Bob' }, due: { kind: 'keep' } }],
+    ]);
+  });
+
+  it('set_task_status done completes the task and tags it done', async () => {
+    const { handlers, calls } = handlersWith({});
+
+    jsonOf(await handlers.setTaskStatus({ taskId: 't1', status: 'done' }));
+
+    expect(calls.map((call) => [call.method, call.input])).toEqual([
+      ['completeTask', { taskId: 't1', taskListId: '@default' }],
+      ['updateTask', { taskId: 't1', taskListId: '@default', title: { kind: 'keep' }, notes: { kind: 'set', value: '[status: done]' }, due: { kind: 'keep' } }],
+    ]);
+  });
+
+  it('create_task with status writes the tag as the first line of the notes', async () => {
+    const { handlers, calls } = handlersWith({});
+
+    jsonOf(await handlers.createTask({ title: 'x', notes: 'details', status: 'doing' }));
+    jsonOf(await handlers.createTask({ title: 'y', status: 'todo' }));
+    jsonOf(await handlers.createTask({ title: 'z', notes: 'plain' }));
+
+    expect(calls.map((call) => call.input)).toEqual([
+      expect.objectContaining({ title: 'x', notes: '[status: doing]\ndetails' }),
+      expect.objectContaining({ title: 'y', notes: '[status: todo]' }),
+      expect.objectContaining({ title: 'z', notes: 'plain' }),
+    ]);
+  });
+
   it('rejects invalid arguments before any Google call', async () => {
     const { handlers, calls } = handlersWith({ listTaskLists: unexpected });
 
@@ -475,9 +523,9 @@ describe('tasks tool annotations', () => {
 
     for (const name of ['list_task_lists', 'list_tasks', 'get_task', 'get_task_list']) expect(hints[name]).toMatchObject({ readOnlyHint: true });
     for (const name of ['delete_task', 'delete_task_list', 'clear_completed_tasks']) expect(hints[name]).toMatchObject({ readOnlyHint: false, destructiveHint: true });
-    for (const name of ['create_task', 'update_task', 'complete_task', 'reopen_task', 'move_task', 'create_task_list', 'rename_task_list']) {
+    for (const name of ['create_task', 'update_task', 'complete_task', 'reopen_task', 'set_task_status', 'move_task', 'create_task_list', 'rename_task_list']) {
       expect(hints[name]).toMatchObject({ readOnlyHint: false, destructiveHint: false });
     }
-    expect(tools).toHaveLength(14);
+    expect(tools).toHaveLength(15);
   });
 });

@@ -1,4 +1,5 @@
 import { dayjs } from '@napolab/gct-core/dayjs';
+import taskBoardHTML from 'virtual:task-board-ui';
 
 import { createJoseVerifier, remoteAccessKeys } from './access-auth';
 import { createApp } from './app';
@@ -14,6 +15,8 @@ const app = createApp({
   // Wrapped: a detached global fetch throws "Illegal invocation" on Workers.
   fetch: async (input, init) => fetch(input, init),
   now: () => dayjs().valueOf(),
+  // MCP App UIs, built into the bundle by the Vite plugin in vite/task-board-ui.ts.
+  mcpAppAssets: { taskBoard: { html: taskBoardHTML } },
 });
 
 const bindingsFor = (env: Env, ctx: ExecutionContext): AppBindings => ({

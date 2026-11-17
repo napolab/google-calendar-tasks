@@ -2,8 +2,10 @@ import { McpServer, WebStandardStreamableHTTPServerTransport } from '@modelconte
 import { CfWorkerJsonSchemaValidator } from '@modelcontextprotocol/server/validators/cf-worker';
 
 import { registerCalendarTools } from '../calendar';
+import { registerTaskBoardApp } from '../task-board';
 import { registerTasksTools } from '../tasks';
 
+import type { TaskBoardAssets } from '../task-board';
 import type { ToolDeps } from '../tool-deps';
 
 // The tools this server registers (asserted against tools/list in the test).
@@ -50,21 +52,28 @@ export const MCP_TOOL_NAMES = [
   'get_colors',
   'list_settings',
   'get_setting',
+  'set_task_status',
+  // MCP App (ui://gct/task-board.html)
+  'show_task_board',
 ] as const;
+
+// Bundled MCP App UIs (isolate lifetime: built into the Worker, injected by the entrypoint).
+export type McpAppAssets = { readonly taskBoard: TaskBoardAssets };
 
 // The JSON Schema validator is injected explicitly: the SDK's default is chosen by build-time export conditions and
 // may resolve to Ajv, which compiles schemas with `new Function` — forbidden on Workers.
-export const createMCPServer = (deps: ToolDeps): McpServer => {
+export const createMCPServer = (deps: ToolDeps, assets: McpAppAssets): McpServer => {
   const server = new McpServer({ name: 'gct', version: '0.1.0' }, { jsonSchemaValidator: new CfWorkerJsonSchemaValidator() });
   registerCalendarTools(server, deps);
   registerTasksTools(server, deps);
+  registerTaskBoardApp(server, deps, assets.taskBoard);
   return server;
 };
 
 // Stateless Streamable HTTP: a fresh server + transport per request (sharing one throws "already connected"),
 // plain JSON responses instead of SSE.
-export const serveMCP = async (request: Request, deps: ToolDeps): Promise<Response> => {
-  const server = createMCPServer(deps);
+export const serveMCP = async (request: Request, deps: ToolDeps, assets: McpAppAssets): Promise<Response> => {
+  const server = createMCPServer(deps, assets);
   const transport = new WebStandardStreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
   await server.connect(transport);
   return transport.handleRequest(request);

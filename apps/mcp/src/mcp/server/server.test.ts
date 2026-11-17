@@ -62,6 +62,8 @@ const tasks: ITasksService = {
 
 const deps: ToolDeps = { services: { calendar, tasks }, now: () => 0, connectURL: 'https://gct.example.com/google/connect' };
 
+const assets = { taskBoard: { html: '<!doctype html><title>board</title>' } };
+
 const rpc = (body: unknown) =>
   new Request('https://gct.example.com/mcp', {
     method: 'POST',
@@ -70,7 +72,7 @@ const rpc = (body: unknown) =>
   });
 
 const call = async (body: unknown) => {
-  const response = await serveMCP(rpc(body), deps);
+  const response = await serveMCP(rpc(body), deps, assets);
   expect(response.status).toBe(200);
   expect(response.headers.get('content-type')).toMatch(/application\/json/);
   return readRPCBody(response);
@@ -93,7 +95,21 @@ describe('serveMCP', () => {
 
     expect((body.result.tools ?? []).map((tool) => tool.name).sort()).toEqual([...MCP_TOOL_NAMES].sort());
     expect(new Set(MCP_TOOL_NAMES).size).toBe(MCP_TOOL_NAMES.length);
-    expect(MCP_TOOL_NAMES).toEqual(expect.arrayContaining(['get_task', 'move_task', 'clear_completed_tasks', 'get_task_list']));
+    expect(MCP_TOOL_NAMES).toEqual(expect.arrayContaining(['get_task', 'move_task', 'clear_completed_tasks', 'get_task_list', 'set_task_status', 'show_task_board']));
+  });
+
+  it('serves the task board MCP App resource it was given', async () => {
+    const response = await serveMCP(rpc({ jsonrpc: '2.0', id: 6, method: 'resources/read', params: { uri: 'ui://gct/task-board.html' } }), deps, assets);
+    const body: unknown = await response.json();
+
+    expect(body).toMatchObject({ result: { contents: [{ uri: 'ui://gct/task-board.html', mimeType: 'text/html;profile=mcp-app', text: assets.taskBoard.html }] } });
+  });
+
+  it("rejects create_task status 'done' and lists the allowed values", async () => {
+    const body = await call({ jsonrpc: '2.0', id: 7, method: 'tools/call', params: { name: 'create_task', arguments: { title: 'x', status: 'done' } } });
+
+    expect(body.result.isError).toBe(true);
+    expect(toolText(body)).toMatch(/todo.*doing/);
   });
 
   it('calls a tool and returns its JSON text', async () => {

@@ -10,12 +10,13 @@
     "cf:types": "cf workers types --mode staging",
     "fmt": "oxfmt --write . && oxlint --fix .",
     "lint": "oxfmt --check . && oxlint .",
-    "typecheck": "tsgo --noEmit -p tsconfig.json",
+    "typecheck": "tsgo --noEmit -p tsconfig.json && tsgo --noEmit -p tsconfig.ui.json",
     "test": "vitest run --typecheck --passWithNoTests",
     "deploy:production": "cf deploy --mode production"
   },
   "dependencies": {
     "@hono/zod-validator": "^0.9.1",
+    "@modelcontextprotocol/ext-apps": "^2.0.4",
     "@modelcontextprotocol/server": "^2.4.0",
     "@napolab/gct-core": "workspace:*",
     "hono": "^4.13.19",
@@ -31,6 +32,7 @@
     "oxlint": "^1.94.0",
     "typescript": "^7.0.2",
     "vite": "^8.3.8",
+    "vite-plugin-singlefile": "^2.3.4",
     "vitest": "^5.1.0"
   }
 }

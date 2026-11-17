@@ -1,6 +1,6 @@
 import { dayjs } from '@napolab/gct-core/dayjs';
 import { InvalidInputError } from '@napolab/gct-core/errors';
-import { DEFAULT_TASK_LIST_ID, validateClearableTaskListId, validateDeletableTaskListId, validateTaskListTitle } from '@napolab/gct-core/tasks';
+import { DEFAULT_TASK_LIST_ID, TASK_BOARD_STATUSES, validateClearableTaskListId, validateDeletableTaskListId, validateTaskListTitle, writeStatusTag } from '@napolab/gct-core/tasks';
 import { Result, err, ok } from 'neverthrow';
 import { z } from 'zod';
 
@@ -21,6 +21,7 @@ import type {
   TaskPageRequest,
   TaskPlacement,
   TaskRef,
+  TaskBoardStatus,
   TaskSiblingPosition,
   TaskUpdatedFilter,
   UpdateTaskInput,
@@ -61,6 +62,12 @@ export const listTasksArgs = z.strictObject({
 
 export const taskRefArgs = z.strictObject({ taskId: taskIdArg, list: listArg });
 
+export const setTaskStatusArgs = z.strictObject({
+  taskId: taskIdArg,
+  list: listArg,
+  status: z.enum(TASK_BOARD_STATUSES).describe("Board column: 'todo', 'doing' or 'done' ('done' completes the task; 'todo' / 'doing' reopen it)."),
+});
+
 export const getTaskListArgs = z.strictObject({
   list: z.string().min(1).describe("The task list: an id or a title from list_task_lists, or '@default'."),
 });
@@ -82,6 +89,10 @@ export const createTaskArgs = z.strictObject({
   title: z.string().describe('Task title (non-empty).'),
   list: listArg,
   notes: z.string().optional(),
+  status: z
+    .enum(['todo', 'doing'])
+    .optional()
+    .describe("Board status written as the first line of the notes ('[status: todo]' / '[status: doing]'). Omit for no tag (shown as todo). For done, create it and then call set_task_status."),
   due: dateArg('Due day'),
   parentId: z.string().min(1).optional().describe('Create as a subtask of this task id.'),
   previousId: z.string().min(1).optional().describe('Place after this sibling task id. Default: first.'),
@@ -112,6 +123,7 @@ export const deleteTaskListArgs = z.strictObject({
 
 export type ListTasksArgs = z.output<typeof listTasksArgs>;
 export type TaskRefArgs = z.output<typeof taskRefArgs>;
+export type SetTaskStatusArgs = z.output<typeof setTaskStatusArgs>;
 export type GetTaskListArgs = z.output<typeof getTaskListArgs>;
 export type MoveTaskArgs = z.output<typeof moveTaskArgs>;
 export type ClearCompletedTasksArgs = z.output<typeof clearCompletedTasksArgs>;
@@ -136,6 +148,11 @@ const parseOptionalDate = (arg: string, value: string | undefined): Result<strin
 const requireTitle = (title: string): Result<string, InvalidInputError> => (title.trim() === '' ? err(new InvalidInputError('title is empty. Pass a non-empty task title.')) : ok(title));
 
 export const toTaskRef = (args: TaskRefArgs): Targeted<TaskRef> => ({ list: toListTarget(args.list), input: { taskId: args.taskId } });
+
+// set_task_status: the task (list still unresolved) and the column to move it to.
+export type TaskStatusChange = { readonly ref: Targeted<TaskRef>; readonly status: TaskBoardStatus };
+
+export const toTaskStatusChange = (args: SetTaskStatusArgs): TaskStatusChange => ({ ref: toTaskRef(args), status: args.status });
 
 // ---- list ----
 
@@ -220,11 +237,14 @@ const toPlacement = (args: { readonly parentId?: string | undefined; readonly pr
 
 const toDue = (due: string | undefined): TaskDue => (due === undefined ? { kind: 'none' } : { kind: 'date', date: due });
 
+// A status puts its tag line above the notes (status-tag template); without one the notes are sent as given.
+const toCreateNotes = (notes: string, status: CreateTaskArgs['status']): string => (status === undefined ? notes : writeStatusTag(notes, status));
+
 export const toCreateTaskInput = (args: CreateTaskArgs): Result<Targeted<CreateTaskInput>, InvalidInputError> =>
   requireTitle(args.title).andThen((title) =>
     parseOptionalDate('due', args.due).map((due): Targeted<CreateTaskInput> => ({
       list: toListTarget(args.list),
-      input: { title, notes: args.notes ?? '', due: toDue(due), placement: toPlacement(args) },
+      input: { title, notes: toCreateNotes(args.notes ?? '', args.status), due: toDue(due), placement: toPlacement(args) },
     })),
   );
 
