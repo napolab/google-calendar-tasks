@@ -38,8 +38,23 @@ const workerFor = (settings: ModeSettings) => ({
 });
 
 // `cf deploy --mode staging` → gct-mcp-stg on gct-stg.napochaan.com behind Cloudflare Access.
+// `cf deploy --mode production` → gct-mcp on gct.napochaan.com behind Cloudflare Access.
 export default defineConfig(({ mode }) => {
   switch (mode) {
+    case 'production':
+      return {
+        accountId: ACCOUNT_ID,
+        worker: {
+          ...workerFor({
+            name: 'gct-mcp',
+            // AUD tag of the host-wide Access app "gct-mcp" (id 587bfc02…) for gct.napochaan.com
+            access: { teamDomain: ACCESS_TEAM, aud: '9b831caefc41ef4cf7fbcfdfa91d3c70e6ab9f730d130200371958cb3b78fe42' },
+            redirectURI: 'https://gct.napochaan.com/google/callback',
+          }),
+          workersDev: false,
+          domains: ['gct.napochaan.com'],
+        },
+      };
     case 'staging':
       return {
         accountId: ACCOUNT_ID,

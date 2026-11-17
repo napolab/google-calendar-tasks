@@ -11,7 +11,8 @@
     "fmt": "oxfmt --write . && oxlint --fix .",
     "lint": "oxfmt --check . && oxlint .",
     "typecheck": "tsgo --noEmit -p tsconfig.json",
-    "test": "vitest run --typecheck --passWithNoTests"
+    "test": "vitest run --typecheck --passWithNoTests",
+    "deploy:production": "cf deploy --mode production"
   },
   "dependencies": {
     "@hono/zod-validator": "^0.9.1",
