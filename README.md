@@ -81,3 +81,7 @@ pnpm --filter @napolab/gct-mcp deploy:production
 | `pnpm test`       | vitest run --typecheck                   |
 | `pnpm build`      | tsdown（package.json の exports を生成） |
 | `pnpm cli <args>` | CLI をソースから実行                     |
+
+## License
+
+[MIT](LICENSE)
