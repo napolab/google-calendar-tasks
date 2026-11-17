@@ -1,16 +1,29 @@
 import { InvalidInputError } from '@napolab/gct-core/errors';
+import { DEFAULT_TASK_LIST_ID } from '@napolab/gct-core/tasks';
 import { err, ok } from 'neverthrow';
 
 import { parseDate } from '../../shared/flags/date';
 import { jsonArg } from '../../shared/flags/json';
 import { toKeepOrSet, toTextPatch } from '../../shared/flags/patch';
 
-import type { CompletedTasksFilter, CreateTaskInput, FieldPatch, ListTasksInput, TaskDueFilter, TaskPlacement, TaskRef, TaskSiblingPosition, UpdateTaskInput } from '@napolab/gct-core/tasks';
+import type {
+  CompletedTasksFilter,
+  CreateTaskInput,
+  FieldPatch,
+  ListTasksInput,
+  TaskDueFilter,
+  TaskPageRequest,
+  TaskPlacement,
+  TaskRef,
+  TaskSiblingPosition,
+  UpdateTaskInput,
+} from '@napolab/gct-core/tasks';
 import type { ArgValues, Args } from 'gunshi';
 import type { Result } from 'neverthrow';
 
 // `gct tasks ...` flags and their mapping to core tasks inputs. Pure. CLI defaults (include completed tasks,
-// 100 per page) live here because core inputs are required unions.
+// 100 per page) live here because core inputs are required unions. `--list` stays unresolved here: a title or id
+// is looked up by the command (../task-list) once the input is valid.
 
 const COMPLETED_CHOICES = ['exclude', 'include', 'hidden'] as const;
 
@@ -18,8 +31,10 @@ type CompletedChoice = (typeof COMPLETED_CHOICES)[number];
 
 // ---- flag schemas ----
 
+const LIST_VALUE = "a task list title or id, or @default (see 'gct tasklists')";
+
 const listArg = {
-  list: { type: 'string', description: "Task list id (default: your default list; see 'gct tasklists')" },
+  list: { type: 'string', description: `Task list: ${LIST_VALUE} (default: your default list)` },
 } satisfies Args;
 
 const taskIdArg = {
@@ -27,7 +42,7 @@ const taskIdArg = {
 } satisfies Args;
 
 export const listTasksArgs = {
-  ...listArg,
+  list: { type: 'string', description: `Only this task list: ${LIST_VALUE} (default: every list)` },
   dueFrom: { type: 'string', description: 'Only tasks due on or after this date (YYYY-MM-DD)' },
   dueTo: { type: 'string', description: 'Only tasks due on or before this date (YYYY-MM-DD)' },
   completed: {
@@ -37,7 +52,7 @@ export const listTasksArgs = {
     description: 'Completed tasks: exclude, include, or hidden (also those completed in Google apps, which Google hides)',
   },
   max: { type: 'number', default: 100, description: 'Tasks per page (1-100)' },
-  pageToken: { type: 'string', description: 'Page token printed by the previous page' },
+  pageToken: { type: 'string', description: 'Page token printed by the previous page (needs --list: a token belongs to one list)' },
   ...jsonArg,
 } satisfies Args;
 
@@ -73,12 +88,17 @@ export type TaskRefFlags = Flags<typeof taskRefArgs>;
 
 // ---- shared ----
 
-// `taskListId` is the one optional core input; it is omitted (→ '@default') unless --list is given.
-const listOf = (list: string | undefined): { readonly taskListId?: string } => (list === undefined ? {} : { taskListId: list });
+// The list a command addresses: Google's default list (no lookup needed), or a `--list` title / id to resolve.
+export type ListTarget = { readonly kind: 'default' } | { readonly kind: 'named'; readonly name: string };
+
+// A core input without its task list, and the list it goes to once resolved.
+export type Targeted<T> = { readonly list: ListTarget; readonly input: Omit<T, 'taskListId'> };
+
+const toListTarget = (list: string | undefined): ListTarget => (list === undefined || list === DEFAULT_TASK_LIST_ID ? { kind: 'default' } : { kind: 'named', name: list });
 
 const parseOptionalDate = (flag: string, value: string | undefined): Result<string | undefined, InvalidInputError> => (value === undefined ? ok(undefined) : parseDate(flag, value));
 
-export const toTaskRef = (taskId: string, flags: TaskRefFlags): TaskRef => ({ ...listOf(flags.list), taskId });
+export const toTaskRef = (taskId: string, flags: TaskRefFlags): Targeted<TaskRef> => ({ list: toListTarget(flags.list), input: { taskId } });
 
 // ---- list ----
 
@@ -89,15 +109,35 @@ const toDueFilter = (dueMin: string | undefined, dueMax: string | undefined): Ta
   return dueMax === undefined ? { kind: 'from', dueMin } : { kind: 'between', dueMin, dueMax };
 };
 
-export const toListTasksInput = (flags: ListTasksFlags): Result<ListTasksInput, InvalidInputError> =>
+// The `tasks list` filters applied to each list it reads.
+export type ListTasksOptions = Omit<ListTasksInput, 'taskListId' | 'page'>;
+
+// Without --list every list is read (first page each); a page token only continues one list.
+export type ListTasksQuery =
+  | { readonly kind: 'all'; readonly options: ListTasksOptions }
+  | { readonly kind: 'one'; readonly list: ListTarget; readonly page: TaskPageRequest; readonly options: ListTasksOptions };
+
+const toPageRequest = (pageToken: string | undefined): TaskPageRequest => (pageToken === undefined ? { kind: 'first' } : { kind: 'token', pageToken });
+
+const toListScope = (flags: ListTasksFlags, options: ListTasksOptions): Result<ListTasksQuery, InvalidInputError> => {
+  if (flags.list !== undefined) return ok({ kind: 'one', list: toListTarget(flags.list), page: toPageRequest(flags.pageToken), options });
+  if (flags.pageToken === undefined) return ok({ kind: 'all', options });
+  return err(
+    new InvalidInputError(
+      `--page-token "${flags.pageToken}" needs --list: a page token continues one task list. Pass the same --list as the listing that printed the token (e.g. gct tasks list --list <title or id> --page-token <token>), or drop --page-token to list every list.`,
+    ),
+  );
+};
+
+export const toListTasksQuery = (flags: ListTasksFlags): Result<ListTasksQuery, InvalidInputError> =>
   parseOptionalDate('--due-from', flags.dueFrom).andThen((dueMin) =>
-    parseOptionalDate('--due-to', flags.dueTo).map((dueMax): ListTasksInput => ({
-      ...listOf(flags.list),
-      due: toDueFilter(dueMin, dueMax),
-      completed: COMPLETED_FILTER[flags.completed],
-      page: flags.pageToken === undefined ? { kind: 'first' } : { kind: 'token', pageToken: flags.pageToken },
-      maxResults: flags.max,
-    })),
+    parseOptionalDate('--due-to', flags.dueTo).andThen((dueMax) =>
+      toListScope(flags, {
+        due: toDueFilter(dueMin, dueMax),
+        completed: COMPLETED_FILTER[flags.completed],
+        maxResults: flags.max,
+      }),
+    ),
   );
 
 // ---- add ----
@@ -109,13 +149,15 @@ const toPlacement = (flags: AddTaskFlags): TaskPlacement => {
   return flags.parent === undefined ? { kind: 'root', position } : { kind: 'subtask', parentId: flags.parent, position };
 };
 
-export const toCreateTaskInput = (title: string, flags: AddTaskFlags): Result<CreateTaskInput, InvalidInputError> =>
-  parseOptionalDate('--due', flags.due).map((due): CreateTaskInput => ({
-    ...listOf(flags.list),
-    title,
-    notes: flags.notes ?? '',
-    due: due === undefined ? { kind: 'none' } : { kind: 'date', date: due },
-    placement: toPlacement(flags),
+export const toCreateTaskInput = (title: string, flags: AddTaskFlags): Result<Targeted<CreateTaskInput>, InvalidInputError> =>
+  parseOptionalDate('--due', flags.due).map((due) => ({
+    list: toListTarget(flags.list),
+    input: {
+      title,
+      notes: flags.notes ?? '',
+      due: due === undefined ? { kind: 'none' } : { kind: 'date', date: due },
+      placement: toPlacement(flags),
+    },
   }));
 
 // ---- update ----
@@ -135,7 +177,9 @@ const validateDuePatch = (patch: FieldPatch<string>): Result<FieldPatch<string>,
   }
 };
 
-const requireChange = (input: UpdateTaskInput): Result<UpdateTaskInput, InvalidInputError> => {
+type UpdateTaskChange = Omit<UpdateTaskInput, 'taskListId'>;
+
+const requireChange = (input: UpdateTaskChange): Result<UpdateTaskChange, InvalidInputError> => {
   if ([input.title, input.notes, input.due].some((patch) => patch.kind !== 'keep')) return ok(input);
   return err(
     new InvalidInputError(
@@ -144,12 +188,13 @@ const requireChange = (input: UpdateTaskInput): Result<UpdateTaskInput, InvalidI
   );
 };
 
-export const toUpdateTaskInput = (taskId: string, flags: UpdateTaskFlags): Result<UpdateTaskInput, InvalidInputError> =>
+export const toUpdateTaskInput = (taskId: string, flags: UpdateTaskFlags): Result<Targeted<UpdateTaskInput>, InvalidInputError> =>
   toKeepOrSet('title', flags.title).andThen((title) =>
     toTextPatch('notes', flags.notes, flags.clearNotes).andThen((notes) =>
       toTextPatch('due', flags.due, flags.clearDue)
         .andThen(validateDuePatch)
-        .map((due): UpdateTaskInput => ({ ...listOf(flags.list), taskId, title, notes, due }))
-        .andThen(requireChange),
+        .map((due): UpdateTaskChange => ({ taskId, title, notes, due }))
+        .andThen(requireChange)
+        .map((input) => ({ list: toListTarget(flags.list), input })),
     ),
   );

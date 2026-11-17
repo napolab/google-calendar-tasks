@@ -8,7 +8,7 @@ import type { CliContext } from '../../context';
 import type { TaskListSummary } from '@napolab/gct-core/tasks';
 import type { ArgValues } from 'gunshi';
 
-// `gct tasklists`: every Google Tasks list, with the id `gct tasks ... --list` takes.
+// `gct tasklists`: every Google Tasks list, with the title / id `gct tasks ... --list` takes.
 
 const formatTaskList = (list: TaskListSummary): string => `${list.title === '' ? '(no title)' : list.title}  [${list.id}]`;
 
@@ -26,7 +26,7 @@ export const runTaskLists = (ctx: CliContext, values: ArgValues<typeof taskLists
 export const createTaskListsCommand = (context: CliContext) =>
   define({
     name: 'tasklists',
-    description: 'List your task lists; the bracketed id is what `gct tasks ... --list` takes',
+    description: 'List your task lists; `gct tasks ... --list` takes the title or the bracketed id',
     args: taskListsArgs,
     run: (ctx) => runTaskLists(context, ctx.values, extraArgsOf(ctx, 0)),
   });

@@ -1,12 +1,14 @@
 import type { Output } from '../../../context';
 import type { AuthorizationDeniedError, ConfigError, CredentialStoreError, InvalidCallbackError, LoginTimeoutError, LoopbackServerError, NotLoggedInError } from '../../../context/errors';
-import type { GoogleError, InvalidInputError } from '@napolab/gct-core/errors';
+import type { AmbiguousTaskListError, GoogleError, InvalidInputError, TaskListNotFoundError } from '@napolab/gct-core/errors';
 import type { ResultAsync } from 'neverthrow';
 
 // Every failure a command can end with.
 export type CommandError =
   | GoogleError
   | InvalidInputError
+  | TaskListNotFoundError
+  | AmbiguousTaskListError
   | ConfigError
   | CredentialStoreError
   | NotLoggedInError
@@ -28,6 +30,8 @@ const HINTS = {
   GoogleNetworkError: 'Check your network connection and retry.',
   GoogleResponseParseError: '',
   InvalidInputError: '',
+  TaskListNotFoundError: 'Run `gct tasklists` to see every task list with its id.',
+  AmbiguousTaskListError: '',
   ConfigError: '',
   CredentialStoreError: '',
   LoopbackServerError: '',

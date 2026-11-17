@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest';
 
-import { formatTaskLine, formatTaskPage } from './index';
+import { formatTaskLine, formatTaskListsTasks, formatTaskPage } from './index';
 
-import type { CompletedTask, OpenTask } from '@napolab/gct-core/tasks';
+import type { TaskListTasks } from '../all-lists';
+import type { CompletedTask, OpenTask, TaskListSummary } from '@napolab/gct-core/tasks';
 
 const OPEN: OpenTask = {
   status: 'needsAction',
@@ -36,5 +37,39 @@ describe('formatTaskPage', () => {
 
   it('says when there are none', () => {
     expect(formatTaskPage({ items: [], next: { kind: 'last' } })).toBe('No tasks.');
+  });
+});
+
+describe('formatTaskListsTasks', () => {
+  const list = (id: string, title: string): TaskListSummary => ({ id, title, updated: '2026-11-17T01:00:00.000Z' });
+  const group = (taskList: TaskListSummary, tasks: TaskListTasks['tasks'], nextPage: TaskListTasks['nextPage'] = { kind: 'last' }): TaskListTasks => ({ taskList, tasks, nextPage });
+
+  it('groups tasks under a header per list title and skips empty lists', () => {
+    const groups = [group(list('MDE', 'マイタスク'), []), group(list('MDI', '日常タスク'), [OPEN]), group(list('MDV', 'VRC'), [DONE])];
+    expect(formatTaskListsTasks(groups)).toBe('# 日常タスク\n[ ] Buy milk  (due 2026-11-20)  [t1]\n\n# VRC\n  [x] (no title)  [t2]');
+  });
+
+  it('tells how to continue a list that has more pages, by title', () => {
+    expect(formatTaskListsTasks([group(list('MDI', '日常タスク'), [OPEN], { kind: 'more', pageToken: 'tok' })])).toBe(
+      '# 日常タスク\n[ ] Buy milk  (due 2026-11-20)  [t1]\nMore tasks: --list 日常タスク --page-token tok',
+    );
+  });
+
+  it('quotes a title with spaces in the continuation hint', () => {
+    expect(formatTaskListsTasks([group(list('MDV', 'vrc タスク'), [OPEN], { kind: 'more', pageToken: 'tok' })])).toContain("More tasks: --list 'vrc タスク' --page-token tok");
+  });
+
+  it('falls back to the list id when the title would not name the list', () => {
+    const untitled = group(list('MD0', ''), [OPEN], { kind: 'more', pageToken: 'tok' });
+    const twin = group(list('MD2', 'Work'), [OPEN], { kind: 'more', pageToken: 'tok2' });
+    const text = formatTaskListsTasks([untitled, group(list('MD1', 'work'), []), twin]);
+    expect(text).toContain('# (no title)\n');
+    expect(text).toContain('More tasks: --list MD0 --page-token tok');
+    expect(text).toContain('More tasks: --list MD2 --page-token tok2');
+  });
+
+  it('says when every list is empty, or there are no lists', () => {
+    expect(formatTaskListsTasks([group(list('MDE', 'マイタスク'), [])])).toBe('No tasks.');
+    expect(formatTaskListsTasks([])).toBe('No tasks.');
   });
 });
