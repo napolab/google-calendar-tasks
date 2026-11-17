@@ -7,6 +7,12 @@ export class GoogleAuthError extends Error {
   override name = 'GoogleAuthError' as const;
 }
 
+// The token endpoint answered `invalid_grant`: the refresh token (or authorization code) is expired,
+// revoked or already used. Retrying cannot help — the user has to authorize again.
+// Discriminate with instanceof. `name` stays 'GoogleAuthError' (inherited) so every edge that maps
+// GoogleAuthError by name (e.g. the CLI hints) keeps treating it as an auth failure.
+export class GoogleInvalidGrantError extends GoogleAuthError {}
+
 // 403: the scope was not granted, the API is disabled in the Cloud project, or the
 // caller has no access to the calendar / task list.
 export class GooglePermissionError extends Error {

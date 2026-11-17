@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { GoogleAuthError, GoogleNetworkError, GoogleResponseParseError } from '../errors';
+import { GoogleAuthError, GoogleInvalidGrantError, GoogleNetworkError, GoogleResponseParseError } from '../errors';
 
 import { buildAuthorizationURL, createPKCE, createRefreshTokenProvider, exchangeAuthorizationCode, refreshAccessToken, revokeToken, toCodeChallenge } from './index';
 
@@ -226,6 +226,22 @@ describe('refreshAccessToken', () => {
     expect(error).toBeInstanceOf(GoogleAuthError);
     expect(error.message).toMatch(/log in again/);
     expect(error.message).not.toContain('refresh-1');
+  });
+
+  it('types an invalid_grant answer as GoogleInvalidGrantError (still a GoogleAuthError)', async () => {
+    const { result } = refreshWith(() => json({ error: 'invalid_grant', error_description: 'Token has been expired or revoked.' }, 400));
+
+    const error = (await result)._unsafeUnwrapErr();
+    expect(error).toBeInstanceOf(GoogleInvalidGrantError);
+    expect(error).toBeInstanceOf(GoogleAuthError);
+  });
+
+  it('keeps other token endpoint errors a plain GoogleAuthError', async () => {
+    const { result } = refreshWith(() => json({ error: 'invalid_client' }, 401));
+
+    const error = (await result)._unsafeUnwrapErr();
+    expect(error).toBeInstanceOf(GoogleAuthError);
+    expect(error).not.toBeInstanceOf(GoogleInvalidGrantError);
   });
 
   it('maps a rejected fetch to GoogleNetworkError', async () => {

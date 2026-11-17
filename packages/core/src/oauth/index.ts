@@ -3,7 +3,7 @@
 import { ResultAsync, errAsync, okAsync } from 'neverthrow';
 import { z } from 'zod';
 
-import { GoogleAuthError, GoogleNetworkError, GoogleResponseParseError } from '../errors';
+import { GoogleAuthError, GoogleInvalidGrantError, GoogleNetworkError, GoogleResponseParseError } from '../errors';
 
 import type { Fetch, GetAccessToken } from '../google-client';
 
@@ -172,12 +172,16 @@ const adviceFor = (hint: ErrorHint, detail: ErrorDetail): readonly string[] => {
   }
 };
 
+// `invalid_grant` gets its own class so callers can tell "authorize again" from transient failures by type.
+const isInvalidGrant = (detail: ErrorDetail): boolean => detail.kind === 'oauth' && detail.body.error === 'invalid_grant';
+
 const toEndpointError =
   (endpoint: string, hint: ErrorHint) =>
   (response: Response): ResultAsync<never, GoogleAuthError> =>
     ResultAsync.fromSafePromise(readJSONOrUndefined(response)).andThen((raw) => {
       const detail = toErrorDetail(raw);
-      return errAsync(new GoogleAuthError([describeOAuthError(endpoint, response.status, detail), ...adviceFor(hint, detail)].join('. ')));
+      const message = [describeOAuthError(endpoint, response.status, detail), ...adviceFor(hint, detail)].join('. ');
+      return errAsync(isInvalidGrant(detail) ? new GoogleInvalidGrantError(message) : new GoogleAuthError(message));
     });
 
 const parseTokenResponse = (response: Response): ResultAsync<TokenResponse, GoogleResponseParseError> =>
