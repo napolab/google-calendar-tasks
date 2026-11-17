@@ -1,0 +1,71 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "plugins": ["typescript", "unicorn", "oxc", "import"],
+  "categories": {},
+  "rules": {
+    "func-style": ["error", "expression"],
+    "prefer-arrow-callback": "error",
+    "unicorn/filename-case": [
+      "error",
+      {
+        "cases": {
+          "kebabCase": true
+        }
+      }
+    ]
+  },
+  "overrides": [
+    {
+      "files": ["src/commands/**"],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              {
+                "regex": "^\\.\\.?/(.*/)?(services)(/|$)",
+                "message": "commands depend on src/context (CliContext) only; main.ts injects the services."
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "files": ["src/services/**"],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              {
+                "regex": "^\\.\\.?/(.*/)?(commands)(/|$)",
+                "message": "services implement src/context and never import commands."
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "files": ["src/context/**"],
+      "rules": {
+        "no-restricted-imports": [
+          "error",
+          {
+            "patterns": [
+              {
+                "regex": "^\\.\\.?/(.*/)?(commands|services)(/|$)",
+                "message": "src/context holds interfaces only and imports no layer."
+              }
+            ]
+          }
+        ]
+      }
+    }
+  ],
+  "env": {
+    "builtin": true
+  },
+  "ignorePatterns": ["dist", "**/*.test.ts", "**/*.test.tsx", "**/*.test-d.ts"]
+}
