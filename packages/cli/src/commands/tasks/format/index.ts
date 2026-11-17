@@ -1,9 +1,10 @@
-import { resolveTaskList } from '@napolab/gct-core/tasks';
+import { orderTasksHierarchically, resolveTaskList } from '@napolab/gct-core/tasks';
 
 import type { TaskListTasks } from '../all-lists';
-import type { Task, TaskDue, TaskHierarchy, TaskListSummary, TaskPage, TaskPageCursor } from '@napolab/gct-core/tasks';
+import type { OrderedTask, Task, TaskDue, TaskHierarchy, TaskListSummary, TaskPage, TaskPageCursor } from '@napolab/gct-core/tasks';
 
 // Human-readable task output: `[ ] title  (due YYYY-MM-DD)  [id]`, subtasks indented, completed ones checked.
+// Listings are in outline order (each parent followed by its subtasks, two spaces per level).
 
 const checkbox = (task: Task): string => {
   switch (task.status) {
@@ -44,7 +45,15 @@ const dueSuffix = (due: TaskDue): string => {
   }
 };
 
-export const formatTaskLine = (task: Task): string => `${indent(task.hierarchy)}${checkbox(task)} ${task.title === '' ? '(no title)' : task.title}${dueSuffix(task.due)}  [${task.id}]`;
+const taskText = (task: Task): string => `${checkbox(task)} ${task.title === '' ? '(no title)' : task.title}${dueSuffix(task.due)}  [${task.id}]`;
+
+// One task on its own (add / update / complete / reopen): a subtask is indented once.
+export const formatTaskLine = (task: Task): string => `${indent(task.hierarchy)}${taskText(task)}`;
+
+// A task in a listing: indented by its depth in the outline (a subtask whose parent is not listed stays at the top level).
+const formatOutlineLine = ({ task, depth }: OrderedTask): string => `${'  '.repeat(depth)}${taskText(task)}`;
+
+const formatOutline = (tasks: readonly Task[]): readonly string[] => orderTasksHierarchically(tasks).map(formatOutlineLine);
 
 const nextPageLines = (next: TaskPageCursor): readonly string[] => {
   switch (next.kind) {
@@ -60,7 +69,7 @@ const nextPageLines = (next: TaskPageCursor): readonly string[] => {
 };
 
 export const formatTaskPage = (page: TaskPage): string => {
-  const lines = [...page.items.map(formatTaskLine), ...nextPageLines(page.next)];
+  const lines = [...formatOutline(page.items), ...nextPageLines(page.next)];
   return lines.length === 0 ? 'No tasks.' : lines.join('\n');
 };
 
@@ -98,7 +107,7 @@ const continueLines = (group: TaskListTasks, all: readonly TaskListSummary[]): r
 
 const isEmpty = (group: TaskListTasks): boolean => group.tasks.length === 0 && group.nextPage.kind === 'last';
 
-const formatGroup = (group: TaskListTasks, all: readonly TaskListSummary[]): string => [`# ${listTitle(group.taskList)}`, ...group.tasks.map(formatTaskLine), ...continueLines(group, all)].join('\n');
+const formatGroup = (group: TaskListTasks, all: readonly TaskListSummary[]): string => [`# ${listTitle(group.taskList)}`, ...formatOutline(group.tasks), ...continueLines(group, all)].join('\n');
 
 export const formatTaskListsTasks = (groups: readonly TaskListTasks[]): string => {
   const all = groups.map((group) => group.taskList);

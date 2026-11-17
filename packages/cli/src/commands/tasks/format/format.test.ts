@@ -42,6 +42,18 @@ describe('formatTaskPage', () => {
   it('says when there are none', () => {
     expect(formatTaskPage({ items: [], next: { kind: 'last' } })).toBe('No tasks.');
   });
+
+  it('lists each parent before its subtasks, indenting two spaces per level', () => {
+    // Google's order: by position alone, so subtasks come first.
+    const child: OpenTask = { ...OPEN, id: 'c1', title: 'Child', due: { kind: 'none' }, hierarchy: { kind: 'subtask', parentId: 't1' }, position: '00000000000000000000' };
+    const grandchild: OpenTask = { ...child, id: 'g1', title: 'Grandchild', hierarchy: { kind: 'subtask', parentId: 'c1' } };
+    expect(formatTaskPage({ items: [grandchild, child, OPEN], next: { kind: 'last' } })).toBe('[ ] Buy milk  (due 2026-11-20)  [t1]\n  [ ] Child  [c1]\n    [ ] Grandchild  [g1]');
+  });
+
+  it('shows a subtask whose parent is not in the page after the top-level tasks, unindented', () => {
+    const orphan: OpenTask = { ...OPEN, id: 'o1', title: 'Orphan', due: { kind: 'none' }, hierarchy: { kind: 'subtask', parentId: 'gone' }, position: '00000000000000000000' };
+    expect(formatTaskPage({ items: [orphan, OPEN], next: { kind: 'last' } })).toBe('[ ] Buy milk  (due 2026-11-20)  [t1]\n[ ] Orphan  [o1]');
+  });
 });
 
 describe('formatTaskListsTasks', () => {
@@ -50,7 +62,12 @@ describe('formatTaskListsTasks', () => {
 
   it('groups tasks under a header per list title and skips empty lists', () => {
     const groups = [group(list('MDE', 'マイタスク'), []), group(list('MDI', '日常タスク'), [OPEN]), group(list('MDV', 'VRC'), [DONE])];
-    expect(formatTaskListsTasks(groups)).toBe('# 日常タスク\n[ ] Buy milk  (due 2026-11-20)  [t1]\n\n# VRC\n  [x] (no title)  [t2]');
+    // t2's parent t1 is in another list's group, so t2 is not indented there.
+    expect(formatTaskListsTasks(groups)).toBe('# 日常タスク\n[ ] Buy milk  (due 2026-11-20)  [t1]\n\n# VRC\n[x] (no title)  [t2]');
+  });
+
+  it('lists each parent before its subtasks within a list, indented under it', () => {
+    expect(formatTaskListsTasks([group(list('MDI', '日常タスク'), [DONE, OPEN])])).toBe('# 日常タスク\n[ ] Buy milk  (due 2026-11-20)  [t1]\n  [x] (no title)  [t2]');
   });
 
   it('tells how to continue a list that has more pages, by title', () => {
