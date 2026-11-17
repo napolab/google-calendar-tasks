@@ -1,151 +1,116 @@
-import { GoogleNotFoundError } from '@napolab/gct-core/errors';
-import { errAsync, okAsync } from 'neverthrow';
+import { okAsync } from 'neverthrow';
 import { describe, expect, it } from 'vitest';
+import { z } from 'zod';
 
-import { GoogleNotConnectedError } from '../../errors';
-import { createCalendarToolHandlers } from './index';
+import { MCP_TOOL_NAMES, serveMCP } from '../server';
+import { depsWith } from './test-support';
 
-import type { ToolDeps } from '../tool-deps';
-import type { ActiveEvent, ICalendarService } from '@napolab/gct-core/calendar';
-import type { Services } from '@napolab/gct-core/services';
-import type { ITasksService } from '@napolab/gct-core/tasks';
+// Every calendar tool, with the annotation preset it must carry.
+const READ_ONLY = { readOnlyHint: true, destructiveHint: false, idempotentHint: true };
+const ADDITIVE = { readOnlyHint: false, destructiveHint: false, idempotentHint: false };
+const IDEMPOTENT_UPDATE = { readOnlyHint: false, destructiveHint: false, idempotentHint: true };
+const DESTRUCTIVE = { readOnlyHint: false, destructiveHint: true, idempotentHint: true };
 
-const NOW = Date.UTC(2026, 10, 17, 3, 0, 0);
-const CONNECT_URL = 'https://gct.example.com/google/connect';
+const CALENDAR_TOOLS = {
+  list_calendars: READ_ONLY,
+  list_events: READ_ONLY,
+  list_event_instances: READ_ONLY,
+  get_event: READ_ONLY,
+  create_event: ADDITIVE,
+  quick_add_event: ADDITIVE,
+  import_event: ADDITIVE,
+  update_event: IDEMPOTENT_UPDATE,
+  move_event: ADDITIVE,
+  delete_event: DESTRUCTIVE,
+  query_freebusy: READ_ONLY,
+  get_calendar: READ_ONLY,
+  create_calendar: ADDITIVE,
+  update_calendar: IDEMPOTENT_UPDATE,
+  delete_calendar: DESTRUCTIVE,
+  clear_calendar: DESTRUCTIVE,
+  get_calendar_list_entry: READ_ONLY,
+  subscribe_calendar: IDEMPOTENT_UPDATE,
+  update_calendar_list_entry: IDEMPOTENT_UPDATE,
+  unsubscribe_calendar: DESTRUCTIVE,
+  list_calendar_acl: READ_ONLY,
+  get_calendar_acl_rule: READ_ONLY,
+  share_calendar: ADDITIVE,
+  update_calendar_acl_rule: DESTRUCTIVE,
+  unshare_calendar: DESTRUCTIVE,
+  get_colors: READ_ONLY,
+  list_settings: READ_ONLY,
+  get_setting: READ_ONLY,
+} as const;
 
-const event: ActiveEvent = {
-  status: 'confirmed',
-  id: 'e1',
-  calendarId: 'primary',
-  summary: 'Standup',
-  description: '',
-  location: '',
-  start: { kind: 'dateTime', dateTime: '2026-11-17T10:00:00+09:00', timeZone: { kind: 'none' } },
-  end: { kind: 'dateTime', dateTime: '2026-11-17T10:15:00+09:00', timeZone: { kind: 'none' } },
-  htmlLink: '',
-  attendees: [],
-  recurrence: { kind: 'single' },
-  created: '',
-  updated: '2026-11-02T00:00:00Z',
-};
-
-const unexpected = () => {
-  throw new Error('unexpected call');
-};
-
-const calendarWith = (overrides: Partial<ICalendarService>): ICalendarService => ({
-  listCalendars: unexpected,
-  listEvents: unexpected,
-  getEvent: unexpected,
-  createEvent: unexpected,
-  updateEvent: unexpected,
-  deleteEvent: unexpected,
-  queryFreeBusy: unexpected,
-  ...overrides,
+const toolsSchema = z.object({
+  result: z.object({
+    tools: z.array(
+      z.object({
+        name: z.string(),
+        description: z.string(),
+        annotations: z.object({ readOnlyHint: z.boolean().optional(), destructiveHint: z.boolean().optional(), idempotentHint: z.boolean().optional() }).optional(),
+      }),
+    ),
+  }),
 });
 
-const tasks: ITasksService = {
-  listTaskLists: unexpected,
-  getTaskList: unexpected,
-  createTaskList: unexpected,
-  renameTaskList: unexpected,
-  deleteTaskList: unexpected,
-  listTasks: unexpected,
-  getTask: unexpected,
-  createTask: unexpected,
-  updateTask: unexpected,
-  completeTask: unexpected,
-  reopenTask: unexpected,
-  deleteTask: unexpected,
+const rpc = (body: unknown): Request =>
+  new Request('https://gct.example.com/mcp', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', accept: 'application/json, text/event-stream', 'mcp-protocol-version': '2025-06-18' },
+    body: JSON.stringify(body),
+  });
+
+const callResultSchema = z.object({ result: z.object({ isError: z.boolean().optional(), content: z.array(z.object({ text: z.string() })) }) });
+
+const listTools = async () => {
+  const response = await serveMCP(rpc({ jsonrpc: '2.0', id: 1, method: 'tools/list', params: {} }), depsWith({}));
+  return toolsSchema.parse(await response.json()).result.tools;
 };
 
-const handlersWith = (overrides: Partial<ICalendarService>) => {
-  const services: Services = { calendar: calendarWith(overrides), tasks };
-  const deps: ToolDeps = { services, now: () => NOW, connectURL: CONNECT_URL };
-  return createCalendarToolHandlers(deps);
-};
-
-const jsonOf = (result: { content: { text: string }[]; isError?: boolean }): unknown => {
-  expect(result.isError).toBeUndefined();
-  return JSON.parse(result.content[0]?.text ?? '');
-};
-
-const errorTextOf = (result: { content: { text: string }[]; isError?: boolean }): string => {
-  expect(result.isError).toBe(true);
-  return result.content[0]?.text ?? '';
-};
-
-describe('calendar tools', () => {
-  it('list_calendars returns the normalized calendars', async () => {
-    const handlers = handlersWith({
-      listCalendars: () => okAsync([{ id: 'c1', summary: 'Work', primary: true, accessRole: 'owner', timeZone: { kind: 'none' }, backgroundColor: { kind: 'none' } }]),
-    });
-
-    expect(jsonOf(await handlers.listCalendars())).toEqual({ calendars: [{ id: 'c1', summary: 'Work', primary: true, accessRole: 'owner', timeZone: null }] });
+describe('calendar tool registration', () => {
+  it('lists every calendar tool in MCP_TOOL_NAMES', () => {
+    expect(MCP_TOOL_NAMES).toEqual(expect.arrayContaining(Object.keys(CALENDAR_TOOLS)));
   });
 
-  it('list_events applies the defaults and reports the window it listed', async () => {
-    const seen: unknown[] = [];
-    const handlers = handlersWith({
-      listEvents: (input) => {
-        seen.push(input);
-        return okAsync({ events: [event], nextPage: { kind: 'none' } });
-      },
-    });
+  it.each(Object.entries(CALENDAR_TOOLS))('registers %s with its read-only / destructive / idempotent hints', async (name, annotations) => {
+    const tool = (await listTools()).find((candidate) => candidate.name === name);
 
-    const body = jsonOf(await handlers.listEvents({}));
-
-    expect(seen).toEqual([
-      { window: { kind: 'between', timeMin: '2026-11-17T12:00:00+09:00', timeMax: '2026-11-24T12:00:00+09:00' }, search: { kind: 'none' }, maxResults: 50, page: { kind: 'first' } },
-    ]);
-    expect(body).toMatchObject({ calendarId: 'primary', window: { from: '2026-11-17T12:00:00+09:00', to: '2026-11-24T12:00:00+09:00' }, nextPageToken: null, events: [{ id: 'e1' }] });
+    expect(tool?.annotations).toEqual(annotations);
   });
 
-  it('rejects invalid input before calling Google', async () => {
-    const handlers = handlersWith({});
+  it.each(['create_event', 'update_event', 'delete_event', 'move_event', 'quick_add_event'])('%s says guests are only emailed when asked', async (name) => {
+    const tool = (await listTools()).find((candidate) => candidate.name === name);
 
-    expect(errorTextOf(await handlers.createEvent({ summary: 'x', time: { kind: 'allDay', date: '2026-13-01' } }))).toContain('2026-13-01');
+    expect(tool?.description).toContain('NOT emailed unless sendUpdates');
   });
 
-  it('create_event / update_event / get_event return the normalized event', async () => {
-    const handlers = handlersWith({ createEvent: () => okAsync(event), updateEvent: () => okAsync(event), getEvent: () => okAsync(event) });
+  it.each(['share_calendar', 'update_calendar_acl_rule', 'unshare_calendar'])('%s is described as sensitive', async (name) => {
+    const tool = (await listTools()).find((candidate) => candidate.name === name);
 
-    expect(jsonOf(await handlers.createEvent({ summary: 'Standup', time: { kind: 'timed', start: '2026-11-17T10:00:00+09:00', end: '2026-11-17T10:15:00+09:00' } }))).toMatchObject({
-      id: 'e1',
-      time: { kind: 'timed' },
-    });
-    expect(jsonOf(await handlers.updateEvent({ eventId: 'e1', summary: 'Standup' }))).toMatchObject({ id: 'e1' });
-    expect(jsonOf(await handlers.getEvent({ eventId: 'e1' }))).toMatchObject({ id: 'e1' });
+    expect(tool?.description).toContain('SENSITIVE');
+  });
+});
+
+describe('clear_calendar confirmation', () => {
+  it.each([[{}], [{ confirm: 'yes' }], [{ confirm: 'delete-all-events', calendarId: 'c1' }]])('refuses %o without touching Google', async (args) => {
+    const calls: unknown[] = [];
+    const deps = depsWith({ clearPrimaryCalendar: () => (calls.push('clear'), okAsync(undefined)) });
+
+    const response = await serveMCP(rpc({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'clear_calendar', arguments: args } }), deps);
+    const body = callResultSchema.parse(await response.json());
+
+    expect(body.result.isError).toBe(true);
+    expect(calls).toEqual([]);
   });
 
-  it('delete_event confirms what was deleted', async () => {
-    const handlers = handlersWith({ deleteEvent: () => okAsync(undefined) });
+  it("clears only with confirm: 'delete-all-events'", async () => {
+    const calls: unknown[] = [];
+    const deps = depsWith({ clearPrimaryCalendar: () => (calls.push('clear'), okAsync(undefined)) });
 
-    expect(jsonOf(await handlers.deleteEvent({ eventId: 'e1', calendarId: 'c1' }))).toEqual({ deleted: true, calendarId: 'c1', eventId: 'e1' });
-    expect(jsonOf(await handlers.deleteEvent({ eventId: 'e1' }))).toEqual({ deleted: true, calendarId: 'primary', eventId: 'e1' });
-  });
+    const response = await serveMCP(rpc({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'clear_calendar', arguments: { confirm: 'delete-all-events' } } }), deps);
 
-  it('query_freebusy returns busy intervals per calendar', async () => {
-    const handlers = handlersWith({
-      queryFreeBusy: (input) => okAsync({ timeMin: input.timeMin, timeMax: input.timeMax, calendars: [{ kind: 'ok', calendarId: 'primary', busy: [{ start: 's', end: 'e' }] }] }),
-    });
-
-    expect(jsonOf(await handlers.queryFreeBusy({ from: '2026-11-17', to: '2026-11-17' }))).toEqual({
-      timeMin: '2026-11-17T00:00:00+09:00',
-      timeMax: '2026-11-18T00:00:00+09:00',
-      calendars: [{ kind: 'ok', calendarId: 'primary', busy: [{ start: 's', end: 'e' }] }],
-    });
-  });
-
-  it('sends the user to the connect page when Google is not connected', async () => {
-    const handlers = handlersWith({ listCalendars: () => errAsync(new GoogleNotConnectedError('not connected')) });
-
-    expect(errorTextOf(await handlers.listCalendars())).toContain(CONNECT_URL);
-  });
-
-  it('maps Google errors to a next step', async () => {
-    const handlers = handlersWith({ getEvent: () => errAsync(new GoogleNotFoundError('Google API 404: Not Found')) });
-
-    expect(errorTextOf(await handlers.getEvent({ eventId: 'missing' }))).toContain('list_events');
+    expect(callResultSchema.parse(await response.json()).result.isError).toBeUndefined();
+    expect(calls).toEqual(['clear']);
   });
 });

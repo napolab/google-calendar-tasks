@@ -20,6 +20,27 @@ const calendar: ICalendarService = {
   updateEvent: unexpected,
   deleteEvent: unexpected,
   queryFreeBusy: unexpected,
+  listEventInstances: unexpected,
+  moveEvent: unexpected,
+  quickAddEvent: unexpected,
+  importEvent: unexpected,
+  getCalendar: unexpected,
+  createCalendar: unexpected,
+  updateCalendar: unexpected,
+  deleteCalendar: unexpected,
+  clearPrimaryCalendar: unexpected,
+  getCalendarListEntry: unexpected,
+  subscribeCalendar: unexpected,
+  updateCalendarListEntry: unexpected,
+  unsubscribeCalendar: unexpected,
+  listCalendarAcl: unexpected,
+  getCalendarAclRule: unexpected,
+  insertCalendarAclRule: unexpected,
+  updateCalendarAclRule: unexpected,
+  deleteCalendarAclRule: unexpected,
+  getColors: unexpected,
+  listSettings: unexpected,
+  getSetting: unexpected,
 };
 
 const tasks: ITasksService = {
@@ -35,6 +56,8 @@ const tasks: ITasksService = {
   createTaskList: unexpected,
   renameTaskList: unexpected,
   deleteTaskList: unexpected,
+  moveTask: unexpected,
+  clearCompletedTasks: unexpected,
 };
 
 const deps: ToolDeps = { services: { calendar, tasks }, now: () => 0, connectURL: 'https://gct.example.com/google/connect' };
@@ -69,7 +92,8 @@ describe('serveMCP', () => {
     const body = await call({ jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} });
 
     expect((body.result.tools ?? []).map((tool) => tool.name).sort()).toEqual([...MCP_TOOL_NAMES].sort());
-    expect(MCP_TOOL_NAMES).toHaveLength(17);
+    expect(new Set(MCP_TOOL_NAMES).size).toBe(MCP_TOOL_NAMES.length);
+    expect(MCP_TOOL_NAMES).toEqual(expect.arrayContaining(['get_task', 'move_task', 'clear_completed_tasks', 'get_task_list']));
   });
 
   it('calls a tool and returns its JSON text', async () => {

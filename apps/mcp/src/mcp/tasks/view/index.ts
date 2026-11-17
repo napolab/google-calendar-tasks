@@ -1,4 +1,4 @@
-import type { Task, TaskDue, TaskHierarchy, TaskListSummary, TaskPage, TaskPageCursor } from '@napolab/gct-core/tasks';
+import type { Task, TaskAssignment, TaskAssignmentSource, TaskDue, TaskHierarchy, TaskLink, TaskListSummary, TaskPage, TaskPageCursor } from '@napolab/gct-core/tasks';
 
 // Read side: tasks shaped for an LLM (ids always present, dates as YYYY-MM-DD, absent values as null; output only).
 
@@ -13,6 +13,11 @@ export type TaskView = {
   readonly completedAt: string | null;
   readonly position: string;
   readonly updated: string;
+  readonly deleted: boolean;
+  readonly hidden: boolean;
+  readonly links: readonly TaskLink[];
+  // null unless the task was assigned to the user from Google Docs / a Chat space.
+  readonly assignment: { readonly linkToTask: string; readonly source: TaskAssignmentSource } | null;
 };
 
 export type TaskListView = { readonly id: string; readonly title: string; readonly updated: string };
@@ -58,6 +63,19 @@ const completedAtOf = (task: Task): string | null => {
   }
 };
 
+const assignmentOf = (assignment: TaskAssignment): TaskView['assignment'] => {
+  switch (assignment.kind) {
+    case 'none':
+      return null;
+    case 'assigned':
+      return { linkToTask: assignment.linkToTask, source: assignment.source };
+    default: {
+      const _exhaustive: never = assignment;
+      throw new Error(`unhandled assignment: ${JSON.stringify(_exhaustive)}`);
+    }
+  }
+};
+
 export const toTaskView = (task: Task): TaskView => ({
   id: task.id,
   taskListId: task.taskListId,
@@ -69,6 +87,10 @@ export const toTaskView = (task: Task): TaskView => ({
   completedAt: completedAtOf(task),
   position: task.position,
   updated: task.updated,
+  deleted: task.deleted,
+  hidden: task.hidden,
+  links: task.links,
+  assignment: assignmentOf(task.assignment),
 });
 
 export const toTaskListView = (list: TaskListSummary): TaskListView => ({ id: list.id, title: list.title, updated: list.updated });

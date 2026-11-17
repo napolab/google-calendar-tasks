@@ -1,17 +1,20 @@
 import { dayjs } from '@napolab/gct-core/dayjs';
 import { InvalidInputError } from '@napolab/gct-core/errors';
-import { DEFAULT_TASK_LIST_ID, validateDeletableTaskListId, validateTaskListTitle } from '@napolab/gct-core/tasks';
+import { DEFAULT_TASK_LIST_ID, validateClearableTaskListId, validateDeletableTaskListId, validateTaskListTitle } from '@napolab/gct-core/tasks';
 import { Result, err, ok } from 'neverthrow';
 import { z } from 'zod';
 
-import { parseDate } from '../../time-input';
+import { parseDate, parseWindowBound, toWindowEnd, toWindowStart } from '../../time-input';
 
+import type { WindowBound } from '../../time-input';
 import type {
+  CompletedAtFilter,
   CreateTaskInput,
   CreateTaskListInput,
   FieldPatch,
   KeepOrSet,
   ListTasksInput,
+  MoveTaskInput,
   RenameTaskListInput,
   TaskDue,
   TaskDueFilter,
@@ -19,6 +22,7 @@ import type {
   TaskPlacement,
   TaskRef,
   TaskSiblingPosition,
+  TaskUpdatedFilter,
   UpdateTaskInput,
 } from '@napolab/gct-core/tasks';
 
@@ -34,6 +38,8 @@ const listArg = z.string().min(1).optional().describe("Task list: an id or a tit
 
 const taskIdArg = z.string().min(1).describe('Task id from list_tasks.');
 
+const instantArg = (meaning: string) => z.string().optional().describe(`${meaning}: RFC 3339 with an offset (e.g. 2026-11-17T09:00:00+09:00), or YYYY-MM-DD (a day in Asia/Tokyo).`);
+
 const dateArg = (meaning: string) => z.string().optional().describe(`${meaning} (YYYY-MM-DD; Google Tasks has no due time).`);
 
 export const listTasksArgs = z.strictObject({
@@ -44,11 +50,33 @@ export const listTasksArgs = z.strictObject({
     .enum(['exclude', 'include', 'includeHidden'])
     .optional()
     .describe("Completed tasks: 'exclude', 'include' (default), or 'includeHidden' (also tasks completed in Google's own apps, which Google hides)."),
+  completedMin: instantArg('Only tasks completed at or after this (a day: from its start). Needs completed tasks'),
+  completedMax: instantArg('Only tasks completed by this (a day: inclusive). Needs completed tasks'),
+  updatedMin: instantArg('Only tasks modified at or after this (a day: from its start)'),
+  showDeleted: z.boolean().optional().describe('true also returns deleted tasks (deleted: true). Default: false.'),
+  showAssigned: z.boolean().optional().describe('true also returns tasks assigned to the user from Google Docs / Chat spaces. Default: false.'),
   maxResults: z.number().int().min(1).max(100).optional().describe(`Tasks per list, 1-100. Default: ${DEFAULT_PAGE_SIZE}.`),
   pageToken: z.string().min(1).optional().describe('nextPageToken of one list from a previous list_tasks call; needs the same list.'),
 });
 
 export const taskRefArgs = z.strictObject({ taskId: taskIdArg, list: listArg });
+
+export const getTaskListArgs = z.strictObject({
+  list: z.string().min(1).describe("The task list: an id or a title from list_task_lists, or '@default'."),
+});
+
+export const moveTaskArgs = z.strictObject({
+  taskId: taskIdArg,
+  list: z.string().min(1).optional().describe("The list the task is in now: an id or a title from list_task_lists, or '@default'. Default: the user's default list."),
+  destinationList: z.string().min(1).optional().describe("Move it into this task list (an id, a title, or '@default'). Default: stay in the current list."),
+  parentId: z.string().min(1).optional().describe('Make it a subtask of this task id (in the destination list). Omit to put it at the top level — this un-nests a subtask.'),
+  previousId: z.string().min(1).optional().describe('Place it right after this sibling task id. Omit to place it first among its siblings.'),
+});
+
+export const clearCompletedTasksArgs = z.strictObject({
+  list: z.string().min(1).describe("The task list to clear: an id or a title from list_task_lists, or '@default'."),
+  confirm: z.literal('clear-completed').describe("Must be exactly 'clear-completed': confirms hiding every completed task of the list."),
+});
 
 export const createTaskArgs = z.strictObject({
   title: z.string().describe('Task title (non-empty).'),
@@ -84,6 +112,9 @@ export const deleteTaskListArgs = z.strictObject({
 
 export type ListTasksArgs = z.output<typeof listTasksArgs>;
 export type TaskRefArgs = z.output<typeof taskRefArgs>;
+export type GetTaskListArgs = z.output<typeof getTaskListArgs>;
+export type MoveTaskArgs = z.output<typeof moveTaskArgs>;
+export type ClearCompletedTasksArgs = z.output<typeof clearCompletedTasksArgs>;
 export type CreateTaskArgs = z.output<typeof createTaskArgs>;
 export type UpdateTaskArgs = z.output<typeof updateTaskArgs>;
 export type CreateTaskListArgs = z.output<typeof createTaskListArgs>;
@@ -125,6 +156,34 @@ const toDueFilter = (dueMin: string | undefined, dueMax: string | undefined): Re
 
 const toPageRequest = (pageToken: string | undefined): TaskPageRequest => (pageToken === undefined ? { kind: 'first' } : { kind: 'token', pageToken });
 
+const parseOptionalBound = (arg: string, value: string | undefined): Result<WindowBound | undefined, InvalidInputError> => (value === undefined ? ok(undefined) : parseWindowBound(arg, value));
+
+const toUpdatedFilter = (args: ListTasksArgs): Result<TaskUpdatedFilter, InvalidInputError> =>
+  parseOptionalBound('updatedMin', args.updatedMin).map((bound): TaskUpdatedFilter => (bound === undefined ? { kind: 'any' } : { kind: 'since', updatedMin: toWindowStart(bound) }));
+
+// A day as completedMin starts at its midnight; a day as completedMax is inclusive (ends at the next midnight).
+const toCompletedRange = (args: ListTasksArgs, min: WindowBound | undefined, max: WindowBound | undefined): Result<CompletedAtFilter, InvalidInputError> => {
+  if (min === undefined) return ok(max === undefined ? { kind: 'any' } : { kind: 'until', completedMax: toWindowEnd(max) });
+  if (max === undefined) return ok({ kind: 'from', completedMin: toWindowStart(min) });
+  const [completedMin, completedMax] = [toWindowStart(min), toWindowEnd(max)];
+  if (dayjs(completedMax).isBefore(dayjs(completedMin)))
+    return err(new InvalidInputError(`completedMax "${args.completedMax ?? ''}" is before completedMin "${args.completedMin ?? ''}". Pass a completedMax on or after completedMin.`));
+  return ok({ kind: 'between', completedMin, completedMax });
+};
+
+// completedMin / completedMax only match completed tasks, so they contradict completed: 'exclude'.
+const requireCompletedTasks = (args: ListTasksArgs, filter: CompletedAtFilter): Result<CompletedAtFilter, InvalidInputError> => {
+  if (filter.kind === 'any' || args.completed !== 'exclude') return ok(filter);
+  return err(new InvalidInputError("completedMin / completedMax only match completed tasks, but completed is 'exclude'. Pass completed 'include' (the default) or 'includeHidden', or drop them."));
+};
+
+const toCompletedAtFilter = (args: ListTasksArgs): Result<CompletedAtFilter, InvalidInputError> =>
+  parseOptionalBound('completedMin', args.completedMin).andThen((min) =>
+    parseOptionalBound('completedMax', args.completedMax)
+      .andThen((max) => toCompletedRange(args, min, max))
+      .andThen((filter) => requireCompletedTasks(args, filter)),
+  );
+
 const toScope = (args: ListTasksArgs, options: ListTasksOptions): Result<ListTasksQuery, InvalidInputError> => {
   if (args.list !== undefined) return ok({ kind: 'one', list: toListTarget(args.list), page: toPageRequest(args.pageToken), options });
   if (args.pageToken === undefined) return ok({ kind: 'all', options });
@@ -135,16 +194,26 @@ const toScope = (args: ListTasksArgs, options: ListTasksOptions): Result<ListTas
   );
 };
 
+const toDueArgs = (args: ListTasksArgs): Result<TaskDueFilter, InvalidInputError> =>
+  parseOptionalDate('dueFrom', args.dueFrom).andThen((dueMin) => parseOptionalDate('dueTo', args.dueTo).andThen((dueMax) => toDueFilter(dueMin, dueMax)));
+
 export const toListTasksQuery = (args: ListTasksArgs): Result<ListTasksQuery, InvalidInputError> =>
-  parseOptionalDate('dueFrom', args.dueFrom).andThen((dueMin) =>
-    parseOptionalDate('dueTo', args.dueTo).andThen((dueMax) =>
-      toDueFilter(dueMin, dueMax).andThen((due) => toScope(args, { due, completed: args.completed ?? 'include', maxResults: args.maxResults ?? DEFAULT_PAGE_SIZE })),
-    ),
+  Result.combine([toDueArgs(args), toCompletedAtFilter(args), toUpdatedFilter(args)]).andThen(([due, completedAt, updated]) =>
+    toScope(args, {
+      due,
+      completed: args.completed ?? 'include',
+      completedAt,
+      updated,
+      deleted: args.showDeleted === true ? 'include' : 'exclude',
+      assigned: args.showAssigned === true ? 'include' : 'exclude',
+      maxResults: args.maxResults ?? DEFAULT_PAGE_SIZE,
+    }),
   );
 
 // ---- create ----
 
-const toPlacement = (args: CreateTaskArgs): TaskPlacement => {
+// An absent parentId means the top level, an absent previousId means first among the siblings.
+const toPlacement = (args: { readonly parentId?: string | undefined; readonly previousId?: string | undefined }): TaskPlacement => {
   const position: TaskSiblingPosition = args.previousId === undefined ? { kind: 'first' } : { kind: 'after', previousId: args.previousId };
   return args.parentId === undefined ? { kind: 'root', position } : { kind: 'subtask', parentId: args.parentId, position };
 };
@@ -195,6 +264,36 @@ export const toUpdateTaskInput = (args: UpdateTaskArgs): Result<Targeted<UpdateT
     .andThen(requireChange)
     .map((input) => ({ list: toListTarget(args.list), input }));
 
+// ---- move ----
+
+// Where move_task takes the task: its own list, or another one still to be resolved.
+export type MoveDestinationTarget = { readonly kind: 'sameList' } | { readonly kind: 'otherList'; readonly list: ListTarget };
+
+// A move with its source list and destination still unresolved.
+export type MoveTaskRequest = {
+  readonly list: ListTarget;
+  readonly destination: MoveDestinationTarget;
+  readonly input: Omit<MoveTaskInput, 'taskListId' | 'destination'>;
+};
+
+// Naming the source list again as the destination is a move within the list.
+const toMoveDestination = (args: MoveTaskArgs): MoveDestinationTarget => {
+  if (args.destinationList === undefined) return { kind: 'sameList' };
+  const [source, destination] = [toListTarget(args.list), toListTarget(args.destinationList)];
+  const same = (source.kind === 'default' && destination.kind === 'default') || (source.kind === 'named' && destination.kind === 'named' && source.name === destination.name);
+  return same ? { kind: 'sameList' } : { kind: 'otherList', list: destination };
+};
+
+const rejectSelf = (arg: string, taskId: string, value: string | undefined): Result<undefined, InvalidInputError> =>
+  value === taskId ? err(new InvalidInputError(`${arg} "${value}" is the task being moved. Pass the id of a different task from list_tasks, or omit ${arg}.`)) : ok(undefined);
+
+export const toMoveTaskRequest = (args: MoveTaskArgs): Result<MoveTaskRequest, InvalidInputError> =>
+  Result.combine([rejectSelf('parentId', args.taskId, args.parentId), rejectSelf('previousId', args.taskId, args.previousId)]).map(() => ({
+    list: toListTarget(args.list),
+    destination: toMoveDestination(args),
+    input: { taskId: args.taskId, placement: toPlacement(args) },
+  }));
+
 // ---- task lists ----
 
 // Titles and the undeletable default list are checked with core's validators before any lookup.
@@ -203,6 +302,11 @@ export const toCreateTaskListInput = (args: CreateTaskListArgs): Result<CreateTa
 
 export const toRenameTaskListInput = (args: RenameTaskListArgs): Result<Targeted<RenameTaskListInput>, InvalidInputError> =>
   validateTaskListTitle(args.title).map((title) => ({ list: toListTarget(args.list), input: { title } }));
+
+export const toGetTaskListTarget = (args: GetTaskListArgs): ListTarget => toListTarget(args.list);
+
+// The list whose completed tasks to clear (never blank), still to be resolved. `confirm` is checked by the schema.
+export const toClearTaskListTarget = (args: ClearCompletedTasksArgs): Result<ListTarget, InvalidInputError> => validateClearableTaskListId(args.list).map(toListTarget);
 
 // The title or id of the list to delete, still to be resolved.
 export const toDeleteTaskListName = (args: DeleteTaskListArgs): Result<string, InvalidInputError> => validateDeletableTaskListId(args.list);

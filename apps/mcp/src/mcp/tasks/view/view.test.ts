@@ -15,6 +15,10 @@ const open: Task = {
   position: '0001',
   updated: '2026-11-17T00:00:00Z',
   webViewLink: 'https://tasks.google.com/task/t1',
+  links: [],
+  assignment: { kind: 'none' },
+  deleted: false,
+  hidden: false,
 };
 
 describe('toTaskView', () => {
@@ -30,6 +34,26 @@ describe('toTaskView', () => {
       completedAt: null,
       position: '0001',
       updated: '2026-11-17T00:00:00Z',
+      deleted: false,
+      hidden: false,
+      links: [],
+      assignment: null,
+    });
+  });
+
+  it('exposes links, the deleted / hidden flags and where an assigned task comes from', () => {
+    const assigned: Task = {
+      ...open,
+      deleted: true,
+      hidden: true,
+      links: [{ type: 'email', description: 'Re: invoice', link: 'https://mail.google.com/x' }],
+      assignment: { kind: 'assigned', linkToTask: 'https://docs.google.com/d/1', source: { kind: 'document', driveFileId: 'F1', resourceKey: '' } },
+    };
+    expect(toTaskView(assigned)).toMatchObject({
+      deleted: true,
+      hidden: true,
+      links: [{ type: 'email', description: 'Re: invoice', link: 'https://mail.google.com/x' }],
+      assignment: { linkToTask: 'https://docs.google.com/d/1', source: { kind: 'document', driveFileId: 'F1', resourceKey: '' } },
     });
   });
 

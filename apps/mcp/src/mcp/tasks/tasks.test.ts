@@ -2,10 +2,14 @@ import { errAsync, okAsync } from 'neverthrow';
 import { describe, expect, it } from 'vitest';
 
 import { GoogleReconnectRequiredError } from '../../errors';
-import { createTasksToolHandlers } from './index';
+import { createTasksToolHandlers, registerTasksTools } from './index';
 
 import type { ToolDeps } from '../tool-deps';
 import type { ICalendarService } from '@napolab/gct-core/calendar';
+import { McpServer, WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/server';
+import { CfWorkerJsonSchemaValidator } from '@modelcontextprotocol/server/validators/cf-worker';
+import { z } from 'zod';
+
 import type { ITasksService, Task, TaskListSummary } from '@napolab/gct-core/tasks';
 
 const CONNECT_URL = 'https://gct.example.com/google/connect';
@@ -26,6 +30,10 @@ const task = (taskListId: string, id = 't1'): Task => ({
   position: '0',
   updated: 'u',
   webViewLink: '',
+  links: [],
+  assignment: { kind: 'none' },
+  deleted: false,
+  hidden: false,
 });
 
 const unexpected = () => {
@@ -40,6 +48,27 @@ const calendar: ICalendarService = {
   updateEvent: unexpected,
   deleteEvent: unexpected,
   queryFreeBusy: unexpected,
+  listEventInstances: unexpected,
+  moveEvent: unexpected,
+  quickAddEvent: unexpected,
+  importEvent: unexpected,
+  getCalendar: unexpected,
+  createCalendar: unexpected,
+  updateCalendar: unexpected,
+  deleteCalendar: unexpected,
+  clearPrimaryCalendar: unexpected,
+  getCalendarListEntry: unexpected,
+  subscribeCalendar: unexpected,
+  updateCalendarListEntry: unexpected,
+  unsubscribeCalendar: unexpected,
+  listCalendarAcl: unexpected,
+  getCalendarAclRule: unexpected,
+  insertCalendarAclRule: unexpected,
+  updateCalendarAclRule: unexpected,
+  deleteCalendarAclRule: unexpected,
+  getColors: unexpected,
+  listSettings: unexpected,
+  getSetting: unexpected,
 };
 
 const handlersWith = (overrides: Partial<ITasksService>) => {
@@ -53,13 +82,17 @@ const handlersWith = (overrides: Partial<ITasksService>) => {
   const tasks: ITasksService = {
     listTaskLists: () => okAsync(LISTS),
     listTasks: record('listTasks', (input: { taskListId?: string }) => okAsync({ items: [task(input.taskListId ?? '@default')], next: { kind: 'last' } as const })),
-    getTask: unexpected,
+    getTask: record('getTask', (input: { taskListId?: string; taskId: string }) => okAsync(task(input.taskListId ?? '@default', input.taskId))),
     createTask: record('createTask', (input: { taskListId?: string }) => okAsync(task(input.taskListId ?? '@default'))),
     updateTask: record('updateTask', (input: { taskListId?: string }) => okAsync(task(input.taskListId ?? '@default'))),
     completeTask: record('completeTask', (input: { taskListId?: string }) => okAsync({ ...task(input.taskListId ?? '@default'), status: 'completed' as const, completedAt: 'c' })),
     reopenTask: record('reopenTask', (input: { taskListId?: string }) => okAsync(task(input.taskListId ?? '@default'))),
     deleteTask: record('deleteTask', () => okAsync(undefined)),
-    getTaskList: unexpected,
+    getTaskList: record('getTaskList', (input: { taskListId: string }) => okAsync({ id: input.taskListId === '@default' ? 'l-default' : input.taskListId, title: 'Got', updated: 'u' })),
+    moveTask: record('moveTask', (input: { taskId: string; taskListId?: string; destination: { kind: string; taskListId?: string } }) =>
+      okAsync(task(input.destination.taskListId ?? input.taskListId ?? '@default', input.taskId)),
+    ),
+    clearCompletedTasks: record('clearCompletedTasks', () => okAsync(undefined)),
     createTaskList: record('createTaskList', (input: { title: string }) => okAsync({ id: 'l-new', title: input.title, updated: 'u' })),
     renameTaskList: record('renameTaskList', (input: { taskListId: string; title: string }) => okAsync({ id: input.taskListId, title: input.title, updated: 'u' })),
     deleteTaskList: record('deleteTaskList', () => okAsync(undefined)),
@@ -98,8 +131,28 @@ describe('tasks tools', () => {
       ],
     });
     expect(calls.map((call) => call.input)).toEqual([
-      { due: { kind: 'any' }, completed: 'include', maxResults: 100, taskListId: 'l-default', page: { kind: 'first' } },
-      { due: { kind: 'any' }, completed: 'include', maxResults: 100, taskListId: 'l-work', page: { kind: 'first' } },
+      {
+        due: { kind: 'any' },
+        completed: 'include',
+        completedAt: { kind: 'any' },
+        updated: { kind: 'any' },
+        deleted: 'exclude',
+        assigned: 'exclude',
+        maxResults: 100,
+        taskListId: 'l-default',
+        page: { kind: 'first' },
+      },
+      {
+        due: { kind: 'any' },
+        completed: 'include',
+        completedAt: { kind: 'any' },
+        updated: { kind: 'any' },
+        deleted: 'exclude',
+        assigned: 'exclude',
+        maxResults: 100,
+        taskListId: 'l-work',
+        page: { kind: 'first' },
+      },
     ]);
   });
 
@@ -200,5 +253,181 @@ describe('tasks tools', () => {
     // A blank list would otherwise title-match an untitled list.
     expect(errorTextOf(await handlers.deleteTaskList({ list: ' ' }))).toContain('id or title');
     expect(calls).toEqual([]);
+  });
+
+  it('list_tasks passes the API filters through to every list', async () => {
+    const { handlers, calls } = handlersWith({});
+
+    jsonOf(await handlers.listTasks({ list: 'Work', updatedMin: '2026-11-17', completedMax: '2026-11-30', showDeleted: true, showAssigned: true }));
+
+    expect(calls[0]?.input).toEqual({
+      due: { kind: 'any' },
+      completed: 'include',
+      completedAt: { kind: 'until', completedMax: '2026-12-01T00:00:00+09:00' },
+      updated: { kind: 'since', updatedMin: '2026-11-17T00:00:00+09:00' },
+      deleted: 'include',
+      assigned: 'include',
+      maxResults: 100,
+      taskListId: 'l-work',
+      page: { kind: 'first' },
+    });
+  });
+
+  it('get_task reads one task from the resolved list', async () => {
+    const { handlers, calls } = handlersWith({});
+
+    expect(jsonOf(await handlers.getTask({ taskId: 't9', list: 'Work' }))).toMatchObject({ id: 't9', taskListId: 'l-work', deleted: false, links: [], assignment: null });
+    expect(calls).toEqual([{ method: 'getTask', input: { taskId: 't9', taskListId: 'l-work' } }]);
+  });
+
+  it('get_task_list resolves a title to its id, and passes @default through without a lookup', async () => {
+    const { handlers, calls } = handlersWith({});
+
+    expect(jsonOf(await handlers.getTaskList({ list: 'work' }))).toEqual({ id: 'l-work', title: 'Got', updated: 'u' });
+    expect(jsonOf(await handlers.getTaskList({ list: '@default' }))).toEqual({ id: 'l-default', title: 'Got', updated: 'u' });
+    expect(calls).toEqual([
+      { method: 'getTaskList', input: { taskListId: 'l-work' } },
+      { method: 'getTaskList', input: { taskListId: '@default' } },
+    ]);
+  });
+
+  it('move_task reorders / nests a task within its resolved list', async () => {
+    const { handlers, calls } = handlersWith({});
+
+    expect(jsonOf(await handlers.moveTask({ taskId: 't1', list: 'Work', parentId: 'p1', previousId: 's1' }))).toMatchObject({ id: 't1', taskListId: 'l-work' });
+    expect(calls).toEqual([
+      {
+        method: 'moveTask',
+        input: { taskId: 't1', taskListId: 'l-work', destination: { kind: 'sameList' }, placement: { kind: 'subtask', parentId: 'p1', position: { kind: 'after', previousId: 's1' } } },
+      },
+    ]);
+  });
+
+  it('move_task moves a task to another list named by title, looking the lists up once', async () => {
+    const lookups: string[] = [];
+    const { handlers, calls } = handlersWith({
+      listTaskLists: () => {
+        lookups.push('listTaskLists');
+        return okAsync(LISTS);
+      },
+    });
+
+    expect(jsonOf(await handlers.moveTask({ taskId: 't1', list: 'My Tasks', destinationList: 'work' }))).toMatchObject({ taskListId: 'l-work' });
+    expect(lookups).toEqual(['listTaskLists']);
+    expect(calls).toEqual([
+      { method: 'moveTask', input: { taskId: 't1', taskListId: 'l-default', destination: { kind: 'otherList', taskListId: 'l-work' }, placement: { kind: 'root', position: { kind: 'first' } } } },
+    ]);
+  });
+
+  it("move_task resolves a '@default' destination to the default list's real id", async () => {
+    const { handlers, calls } = handlersWith({});
+
+    jsonOf(await handlers.moveTask({ taskId: 't1', list: 'Work', destinationList: '@default' }));
+
+    expect(calls.map((call) => [call.method, call.input])).toEqual([
+      ['getTaskList', { taskListId: '@default' }],
+      ['moveTask', { taskId: 't1', taskListId: 'l-work', destination: { kind: 'otherList', taskListId: 'l-default' }, placement: { kind: 'root', position: { kind: 'first' } } }],
+    ]);
+  });
+
+  it('move_task stays in the list when the destination resolves to the source list', async () => {
+    const { handlers, calls } = handlersWith({});
+
+    jsonOf(await handlers.moveTask({ taskId: 't1', list: 'Work', destinationList: 'l-work' }));
+
+    expect(calls).toMatchObject([{ method: 'moveTask', input: { taskListId: 'l-work', destination: { kind: 'sameList' } } }]);
+  });
+
+  it('move_task rejects moving a task under itself before any Google call', async () => {
+    const { handlers, calls } = handlersWith({ listTaskLists: unexpected });
+
+    expect(errorTextOf(await handlers.moveTask({ taskId: 't1', list: 'Work', parentId: 't1' }))).toContain('parentId');
+    expect(calls).toEqual([]);
+  });
+
+  it('move_task names the available lists when the destination does not exist, and moves nothing', async () => {
+    const { handlers, calls } = handlersWith({});
+
+    expect(errorTextOf(await handlers.moveTask({ taskId: 't1', destinationList: 'Nope' }))).toContain('"Work"');
+    expect(calls).toEqual([]);
+  });
+
+  it('clear_completed_tasks clears the resolved list and reports which list was cleared', async () => {
+    const { handlers, calls } = handlersWith({});
+
+    expect(jsonOf(await handlers.clearCompletedTasks({ list: 'Work', confirm: 'clear-completed' }))).toEqual({ cleared: true, taskList: { id: 'l-work', title: 'Work', updated: 'u' } });
+    expect(jsonOf(await handlers.clearCompletedTasks({ list: '@default', confirm: 'clear-completed' }))).toEqual({ cleared: true, taskList: { id: 'l-default', title: 'Got', updated: 'u' } });
+    expect(calls).toEqual([
+      { method: 'clearCompletedTasks', input: { taskListId: 'l-work' } },
+      { method: 'getTaskList', input: { taskListId: '@default' } },
+      { method: 'clearCompletedTasks', input: { taskListId: 'l-default' } },
+    ]);
+  });
+
+  it('clear_completed_tasks rejects a blank list and clears nothing when the list does not exist', async () => {
+    const { handlers, calls } = handlersWith({});
+
+    expect(errorTextOf(await handlers.clearCompletedTasks({ list: ' ', confirm: 'clear-completed' }))).toContain('" "');
+    expect(errorTextOf(await handlers.clearCompletedTasks({ list: 'Nope', confirm: 'clear-completed' }))).toContain('"Work"');
+    expect(calls).toEqual([]);
+  });
+});
+
+const toolsListSchema = z.object({
+  result: z.object({
+    tools: z.array(
+      z.object({
+        name: z.string(),
+        annotations: z.object({ readOnlyHint: z.boolean().optional(), destructiveHint: z.boolean().optional(), idempotentHint: z.boolean().optional() }).optional(),
+      }),
+    ),
+  }),
+});
+
+// tools/list as a client sees it, for the tasks tools only.
+const unusedTasks: ITasksService = {
+  listTaskLists: unexpected,
+  getTaskList: unexpected,
+  createTaskList: unexpected,
+  renameTaskList: unexpected,
+  deleteTaskList: unexpected,
+  listTasks: unexpected,
+  getTask: unexpected,
+  createTask: unexpected,
+  updateTask: unexpected,
+  completeTask: unexpected,
+  reopenTask: unexpected,
+  deleteTask: unexpected,
+  moveTask: unexpected,
+  clearCompletedTasks: unexpected,
+};
+
+const listTasksTools = async () => {
+  const deps: ToolDeps = { services: { calendar, tasks: unusedTasks }, now: () => 0, connectURL: CONNECT_URL };
+  const server = new McpServer({ name: 'test', version: '0' }, { jsonSchemaValidator: new CfWorkerJsonSchemaValidator() });
+  registerTasksTools(server, deps);
+  const transport = new WebStandardStreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
+  await server.connect(transport);
+  const response = await transport.handleRequest(
+    new Request('https://gct.example.com/mcp', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', accept: 'application/json, text/event-stream', 'mcp-protocol-version': '2025-06-18' },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list', params: {} }),
+    }),
+  );
+  return toolsListSchema.parse(await response.json()).result.tools;
+};
+
+describe('tasks tool annotations', () => {
+  it('marks reads read-only, deletes / clear destructive, and every write not read-only', async () => {
+    const tools = await listTasksTools();
+    const hints = Object.fromEntries(tools.map((tool) => [tool.name, tool.annotations]));
+
+    for (const name of ['list_task_lists', 'list_tasks', 'get_task', 'get_task_list']) expect(hints[name]).toMatchObject({ readOnlyHint: true });
+    for (const name of ['delete_task', 'delete_task_list', 'clear_completed_tasks']) expect(hints[name]).toMatchObject({ readOnlyHint: false, destructiveHint: true });
+    for (const name of ['create_task', 'update_task', 'complete_task', 'reopen_task', 'move_task', 'create_task_list', 'rename_task_list']) {
+      expect(hints[name]).toMatchObject({ readOnlyHint: false, destructiveHint: false });
+    }
+    expect(tools).toHaveLength(14);
   });
 });

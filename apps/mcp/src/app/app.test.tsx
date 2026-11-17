@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest';
 
 import { ACCESS_ASSERTION_HEADER } from '../access-auth';
 import { InvalidAccessAssertion } from '../errors';
+import { MCP_TOOL_NAMES } from '../mcp/server';
 import { createTokenStoreRPC } from '../token-store/rpc';
 import { createTokenVault } from '../token-store/vault';
 import { readRPCBody, toolText } from '../test-support';
@@ -281,7 +282,7 @@ describe('/mcp', () => {
     const response = await mcp(request, { jsonrpc: '2.0', id: 1, method: 'tools/list', params: {} });
 
     expect(response.status).toBe(200);
-    expect((await readRPCBody(response)).result.tools).toHaveLength(17);
+    expect((await readRPCBody(response)).result.tools).toHaveLength(MCP_TOOL_NAMES.length);
   });
 
   it('tells the LLM to send the user to the connect page (on this host) before Google is connected', async () => {

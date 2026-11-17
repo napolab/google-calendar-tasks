@@ -6,15 +6,19 @@ import {
   deleteTaskListArgs,
   renameTaskListArgs,
   toCreateTaskInput,
+  clearCompletedTasksArgs,
+  moveTaskArgs,
+  toClearTaskListTarget,
   toCreateTaskListInput,
   toDeleteTaskListName,
+  toMoveTaskRequest,
   toListTasksQuery,
   toRenameTaskListInput,
   toTaskRef,
   toUpdateTaskInput,
 } from './index';
 
-import type { CreateTaskArgs, ListTasksArgs, UpdateTaskArgs } from './index';
+import type { CreateTaskArgs, ListTasksArgs, MoveTaskArgs, UpdateTaskArgs } from './index';
 
 const messageOf = (result: { _unsafeUnwrapErr: () => Error }) => {
   const error = result._unsafeUnwrapErr();
@@ -22,7 +26,7 @@ const messageOf = (result: { _unsafeUnwrapErr: () => Error }) => {
   return error.message;
 };
 
-const OPTIONS = { due: { kind: 'any' }, completed: 'include', maxResults: 100 };
+const OPTIONS = { due: { kind: 'any' }, completed: 'include', completedAt: { kind: 'any' }, updated: { kind: 'any' }, deleted: 'exclude', assigned: 'exclude', maxResults: 100 };
 
 describe('toListTasksQuery', () => {
   it('reads every list with completed tasks included and 100 per list by default', () => {
@@ -34,7 +38,7 @@ describe('toListTasksQuery', () => {
       kind: 'one',
       list: { kind: 'named', name: 'Work' },
       page: { kind: 'token', pageToken: 'p2' },
-      options: { due: { kind: 'any' }, completed: 'exclude', maxResults: 20 },
+      options: { due: { kind: 'any' }, completed: 'exclude', completedAt: { kind: 'any' }, updated: { kind: 'any' }, deleted: 'exclude', assigned: 'exclude', maxResults: 20 },
     });
   });
 
@@ -59,6 +63,103 @@ describe('toListTasksQuery', () => {
     [{ dueFrom: '2026-11-30', dueTo: '2026-11-17' }, 'dueTo'],
   ])('rejects invalid input (%#)', (args, expected) => {
     expect(messageOf(toListTasksQuery(args))).toContain(expected);
+  });
+});
+
+describe('toListTasksQuery API filters', () => {
+  it('includes deleted / assigned tasks on request', () => {
+    expect(toListTasksQuery({ showDeleted: true, showAssigned: true })._unsafeUnwrap()).toMatchObject({ options: { deleted: 'include', assigned: 'include' } });
+  });
+
+  it.each<[ListTasksArgs, unknown]>([
+    [{ updatedMin: '2026-11-17T10:00:00+09:00' }, { kind: 'since', updatedMin: '2026-11-17T10:00:00+09:00' }],
+    [{ updatedMin: '2026-11-17' }, { kind: 'since', updatedMin: '2026-11-17T00:00:00+09:00' }],
+  ])('maps updatedMin (%#): a day starts at midnight Asia/Tokyo', (args, updated) => {
+    expect(toListTasksQuery(args)._unsafeUnwrap()).toMatchObject({ options: { updated } });
+  });
+
+  it.each<[ListTasksArgs, unknown]>([
+    [{ completedMin: '2026-11-01' }, { kind: 'from', completedMin: '2026-11-01T00:00:00+09:00' }],
+    [{ completedMax: '2026-11-30' }, { kind: 'until', completedMax: '2026-12-01T00:00:00+09:00' }],
+    [
+      { completedMin: '2026-11-17T09:00:00Z', completedMax: '2026-11-17T10:00:00Z' },
+      { kind: 'between', completedMin: '2026-11-17T09:00:00Z', completedMax: '2026-11-17T10:00:00Z' },
+    ],
+    [
+      { completedMin: '2026-11-17', completedMax: '2026-11-17' },
+      { kind: 'between', completedMin: '2026-11-17T00:00:00+09:00', completedMax: '2026-11-18T00:00:00+09:00' },
+    ],
+  ])('maps completedMin / completedMax (%#): a completedMax day is inclusive', (args, completedAt) => {
+    expect(toListTasksQuery(args)._unsafeUnwrap()).toMatchObject({ options: { completedAt } });
+  });
+
+  it.each<[ListTasksArgs, readonly string[]]>([
+    [{ updatedMin: 'yesterday' }, ['updatedMin', 'yesterday', 'RFC 3339']],
+    [{ completedMin: '2026-11-17T10:00:00' }, ['completedMin', 'offset']],
+    [{ completedMin: '2026-11-30', completedMax: '2026-11-01' }, ['completedMax "2026-11-01"', 'completedMin "2026-11-30"']],
+    [{ completed: 'exclude', completedMin: '2026-11-01' }, ['completedMin', "'exclude'", "'include'"]],
+  ])('rejects invalid filters (%#)', (args, expected) => {
+    const message = messageOf(toListTasksQuery(args));
+    for (const text of expected) expect(message).toContain(text);
+  });
+});
+
+describe('toMoveTaskRequest', () => {
+  const move = (args: Omit<MoveTaskArgs, 'taskId'>) => toMoveTaskRequest({ taskId: 't1', ...args });
+
+  it('moves a task to the top of its own (default) list when nothing else is given', () => {
+    expect(move({})._unsafeUnwrap()).toEqual({
+      list: { kind: 'default' },
+      destination: { kind: 'sameList' },
+      input: { taskId: 't1', placement: { kind: 'root', position: { kind: 'first' } } },
+    });
+  });
+
+  it('maps parentId / previousId to the placement', () => {
+    expect(move({ list: 'Work', parentId: 'p1', previousId: 's1' })._unsafeUnwrap()).toEqual({
+      list: { kind: 'named', name: 'Work' },
+      destination: { kind: 'sameList' },
+      input: { taskId: 't1', placement: { kind: 'subtask', parentId: 'p1', position: { kind: 'after', previousId: 's1' } } },
+    });
+    expect(move({ previousId: 's1' })._unsafeUnwrap().input.placement).toEqual({ kind: 'root', position: { kind: 'after', previousId: 's1' } });
+  });
+
+  it('moves to another list (a title, an id or @default) unless it names the same list', () => {
+    expect(move({ list: 'Work', destinationList: 'Home' })._unsafeUnwrap().destination).toEqual({ kind: 'otherList', list: { kind: 'named', name: 'Home' } });
+    expect(move({ list: 'Work', destinationList: '@default' })._unsafeUnwrap().destination).toEqual({ kind: 'otherList', list: { kind: 'default' } });
+    expect(move({ list: 'Work', destinationList: 'Work' })._unsafeUnwrap().destination).toEqual({ kind: 'sameList' });
+    expect(move({ destinationList: '@default' })._unsafeUnwrap().destination).toEqual({ kind: 'sameList' });
+  });
+
+  it.each<[Omit<MoveTaskArgs, 'taskId'>, string]>([
+    [{ parentId: 't1' }, 'parentId'],
+    [{ previousId: 't1' }, 'previousId'],
+  ])('rejects the task itself as its own %s', (args, field) => {
+    const message = messageOf(move(args));
+    expect(message).toContain(field);
+    expect(message).toContain('"t1"');
+  });
+
+  it('rejects unknown keys', () => {
+    expect(moveTaskArgs.safeParse({ taskId: 't1', destination: 'Work' }).success).toBe(false);
+  });
+});
+
+describe('toClearTaskListTarget', () => {
+  it('requires the confirm literal and a list', () => {
+    expect(clearCompletedTasksArgs.safeParse({ list: 'Work', confirm: 'clear-completed' }).success).toBe(true);
+    expect(clearCompletedTasksArgs.safeParse({ list: 'Work' }).success).toBe(false);
+    expect(clearCompletedTasksArgs.safeParse({ list: 'Work', confirm: 'yes' }).success).toBe(false);
+    expect(clearCompletedTasksArgs.safeParse({ confirm: 'clear-completed' }).success).toBe(false);
+  });
+
+  it('targets a named list, or the default list for @default', () => {
+    expect(toClearTaskListTarget({ list: 'Work', confirm: 'clear-completed' })._unsafeUnwrap()).toEqual({ kind: 'named', name: 'Work' });
+    expect(toClearTaskListTarget({ list: '@default', confirm: 'clear-completed' })._unsafeUnwrap()).toEqual({ kind: 'default' });
+  });
+
+  it('rejects a blank list', () => {
+    expect(messageOf(toClearTaskListTarget({ list: '  ', confirm: 'clear-completed' }))).toContain('"  "');
   });
 });
 
