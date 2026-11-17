@@ -21,7 +21,7 @@ Anything that touches the filesystem, the process, a browser, or Workers binding
 
 ## Allowed
 
-- Service interfaces (`ICalendarService`, `ITasksService`) and the `Services` map
+- Service interfaces (`ICalendarService`, `ITasksService`) and the `Services` map type (no `createServices` aggregator — each entrypoint lists the factories)
 - Service factories that take their dependencies as arguments (`createCalendarService({ fetch, getAccessToken })`)
 - zod schemas for Google API payloads and tool / command input
 - Error classes, constants, pure helpers
@@ -46,7 +46,9 @@ type HonoEnv = { Bindings: Env; Variables: { services: Services } };
 const factory = createFactory<HonoEnv>({
   initApp(app) {
     app.use(async (c, next) => {
-      c.set('services', createServices(c.env, c.var.identity));
+      const client = createGoogleClient({ fetch, getAccessToken: tokenProviderFor(c.env, c.var.identity) });
+      // List the factories at the use site — core exports only the `Services` type.
+      c.set('services', { calendar: createCalendarService({ client }), tasks: createTasksService({ client }) });
       await next();
     });
   },

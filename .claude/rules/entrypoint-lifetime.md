@@ -25,3 +25,13 @@ const login = async () => {
 ```
 
 Why: lifetimes become visible in one place, cleanup is guaranteed by the owner, and the function becomes testable with a fake (`LoopbackServer`, fake `fetch`) instead of a real port.
+
+## No aggregator factories
+
+Don't wrap the wiring in helper factories (`createServices`, `createConnect`, …) whose body only calls other factories. The entrypoint lists the concrete factories inline, so what gets built — and with which shared `client` / `fetch` — is visible where the lifetimes are owned.
+
+```ts
+// main.ts / Hono initApp
+const client = createGoogleClient({ fetch, getAccessToken });
+const services: Services = { calendar: createCalendarService({ client }), tasks: createTasksService({ client }) };
+```
