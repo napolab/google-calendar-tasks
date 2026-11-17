@@ -39,6 +39,27 @@ export class TokenStoreUnavailableError extends Error {
   override name = 'TokenStoreUnavailableError' as const;
 }
 
+// ---- MCP task tools ----
+
+const describeAvailableLists = (titles: readonly string[]): string =>
+  titles.length === 0 ? 'There are no task lists in this account.' : `Available task lists: ${titles.map((title) => `"${title}"`).join(', ')}.`;
+
+// `list` was omitted, so the configured default task list (DEFAULT_TASK_LIST) was used, but no list in the user's
+// account has that id or title. Built from core's TaskListNotFoundError, whose titles it repeats.
+export class DefaultTaskListNotFoundError extends Error {
+  override name = 'DefaultTaskListNotFoundError' as const;
+  readonly query: string;
+  readonly titles: readonly string[];
+
+  constructor(query: string, titles: readonly string[]) {
+    super(
+      `list was omitted, so this server's default task list "${query}" (DEFAULT_TASK_LIST) was used, but no task list has that id or title. ${describeAvailableLists(titles)} Pass list explicitly: one of these titles, an id from list_task_lists, or '@default' for Google's own default list. Only if the user asks for it, create "${query}" with create_task_list.`,
+    );
+    this.query = query;
+    this.titles = titles;
+  }
+}
+
 // ---- OAuth callback ----
 
 export type OAuthStateProblem = 'missing' | 'mismatch' | 'expired';

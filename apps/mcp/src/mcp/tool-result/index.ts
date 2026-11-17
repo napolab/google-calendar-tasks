@@ -2,10 +2,11 @@ import { describeToolError } from './error-messages';
 
 import type { ToolResource } from './error-messages';
 
+import type { DefaultTaskListNotFoundError } from '../../errors';
 import type { AmbiguousTaskListError, GoogleError, InvalidInputError, TaskListNotFoundError } from '@napolab/gct-core/errors';
 
 // Every failure a tool can end with.
-export type ToolError = GoogleError | InvalidInputError | TaskListNotFoundError | AmbiguousTaskListError;
+export type ToolError = GoogleError | InvalidInputError | TaskListNotFoundError | AmbiguousTaskListError | DefaultTaskListNotFoundError;
 
 export type ToolResult = {
   content: { type: 'text'; text: string }[];

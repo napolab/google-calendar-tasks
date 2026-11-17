@@ -28,14 +28,19 @@ import type {
 } from '@napolab/gct-core/tasks';
 
 // Tasks tool arguments (zod schemas) and their mapping to core inputs. `list` stays unresolved here: a title or id
-// is looked up by the handler (core findTaskList: by id first, then by title) once the arguments are valid. Same defaults as the CLI:
-// every list when `list` is omitted, completed tasks included, 100 per list.
+// is looked up by the handler (core findTaskList: by id first, then by title) once the arguments are valid. list_tasks
+// reads every list when `list` is omitted (completed tasks included, 100 per list, like the CLI); the single-task tools
+// use the server's configured default list (ToolDeps.defaultTaskList), so their schemas are built from its name.
 
 const DEFAULT_PAGE_SIZE = 100;
 
 // ---- schemas ----
 
-const listArg = z.string().min(1).optional().describe("Task list: an id or a title from list_task_lists, or '@default'. Default: the user's default list.");
+// `list` of a single-task tool: omitted means the configured default list, named in the description.
+const optionalListArg = (meaning: string, defaultTaskList: string) =>
+  z.string().min(1).optional().describe(`${meaning}: an id or a title from list_task_lists, or '@default' (Google's own default list). Default: "${defaultTaskList}".`);
+
+const listArg = (defaultTaskList: string) => optionalListArg('Task list', defaultTaskList);
 
 const taskIdArg = z.string().min(1).describe('Task id from list_tasks.');
 
@@ -60,53 +65,57 @@ export const listTasksArgs = z.strictObject({
   pageToken: z.string().min(1).optional().describe('nextPageToken of one list from a previous list_tasks call; needs the same list.'),
 });
 
-export const taskRefArgs = z.strictObject({ taskId: taskIdArg, list: listArg });
+export const taskRefArgs = (defaultTaskList: string) => z.strictObject({ taskId: taskIdArg, list: listArg(defaultTaskList) });
 
-export const setTaskStatusArgs = z.strictObject({
-  taskId: taskIdArg,
-  list: listArg,
-  status: z.enum(TASK_BOARD_STATUSES).describe("Board column: 'todo', 'doing' or 'done' ('done' completes the task; 'todo' / 'doing' reopen it)."),
-});
+export const setTaskStatusArgs = (defaultTaskList: string) =>
+  z.strictObject({
+    taskId: taskIdArg,
+    list: listArg(defaultTaskList),
+    status: z.enum(TASK_BOARD_STATUSES).describe("Board column: 'todo', 'doing' or 'done' ('done' completes the task; 'todo' / 'doing' reopen it)."),
+  });
 
 export const getTaskListArgs = z.strictObject({
   list: z.string().min(1).describe("The task list: an id or a title from list_task_lists, or '@default'."),
 });
 
-export const moveTaskArgs = z.strictObject({
-  taskId: taskIdArg,
-  list: z.string().min(1).optional().describe("The list the task is in now: an id or a title from list_task_lists, or '@default'. Default: the user's default list."),
-  destinationList: z.string().min(1).optional().describe("Move it into this task list (an id, a title, or '@default'). Default: stay in the current list."),
-  parentId: z.string().min(1).optional().describe('Make it a subtask of this task id (in the destination list). Omit to put it at the top level — this un-nests a subtask.'),
-  previousId: z.string().min(1).optional().describe('Place it right after this sibling task id. Omit to place it first among its siblings.'),
-});
+export const moveTaskArgs = (defaultTaskList: string) =>
+  z.strictObject({
+    taskId: taskIdArg,
+    list: optionalListArg('The list the task is in now', defaultTaskList),
+    destinationList: z.string().min(1).optional().describe("Move it into this task list (an id, a title, or '@default'). Default: stay in the current list."),
+    parentId: z.string().min(1).optional().describe('Make it a subtask of this task id (in the destination list). Omit to put it at the top level — this un-nests a subtask.'),
+    previousId: z.string().min(1).optional().describe('Place it right after this sibling task id. Omit to place it first among its siblings.'),
+  });
 
 export const clearCompletedTasksArgs = z.strictObject({
   list: z.string().min(1).describe("The task list to clear: an id or a title from list_task_lists, or '@default'."),
   confirm: z.literal('clear-completed').describe("Must be exactly 'clear-completed': confirms hiding every completed task of the list."),
 });
 
-export const createTaskArgs = z.strictObject({
-  title: z.string().describe('Task title (non-empty).'),
-  list: listArg,
-  notes: z.string().optional(),
-  status: z
-    .enum(['todo', 'doing'])
-    .optional()
-    .describe("Board status written as the first line of the notes ('[status: todo]' / '[status: doing]'). Omit for no tag (shown as todo). For done, create it and then call set_task_status."),
-  due: dateArg('Due day'),
-  parentId: z.string().min(1).optional().describe('Create as a subtask of this task id.'),
-  previousId: z.string().min(1).optional().describe('Place after this sibling task id. Default: first.'),
-});
+export const createTaskArgs = (defaultTaskList: string) =>
+  z.strictObject({
+    title: z.string().describe('Task title (non-empty).'),
+    list: listArg(defaultTaskList),
+    notes: z.string().optional(),
+    status: z
+      .enum(['todo', 'doing'])
+      .optional()
+      .describe("Board status written as the first line of the notes ('[status: todo]' / '[status: doing]'). Omit for no tag (shown as todo). For done, create it and then call set_task_status."),
+    due: dateArg('Due day'),
+    parentId: z.string().min(1).optional().describe('Create as a subtask of this task id.'),
+    previousId: z.string().min(1).optional().describe('Place after this sibling task id. Default: first.'),
+  });
 
-export const updateTaskArgs = z.strictObject({
-  taskId: taskIdArg,
-  list: listArg,
-  title: z.string().optional().describe('New title (non-empty). Omit to keep.'),
-  notes: z.string().optional().describe('New notes. Omit to keep; use clearNotes to remove.'),
-  clearNotes: z.boolean().optional().describe('true removes the notes.'),
-  due: dateArg('New due day. Omit to keep; use clearDue to remove'),
-  clearDue: z.boolean().optional().describe('true removes the due date.'),
-});
+export const updateTaskArgs = (defaultTaskList: string) =>
+  z.strictObject({
+    taskId: taskIdArg,
+    list: listArg(defaultTaskList),
+    title: z.string().optional().describe('New title (non-empty). Omit to keep.'),
+    notes: z.string().optional().describe('New notes. Omit to keep; use clearNotes to remove.'),
+    clearNotes: z.boolean().optional().describe('true removes the notes.'),
+    due: dateArg('New due day. Omit to keep; use clearDue to remove'),
+    clearDue: z.boolean().optional().describe('true removes the due date.'),
+  });
 
 const taskListTitleArg = z.string().describe('Task list title (non-empty, at most 1024 characters).');
 
@@ -118,30 +127,36 @@ export const renameTaskListArgs = z.strictObject({
 });
 
 export const deleteTaskListArgs = z.strictObject({
-  list: z.string().min(1).describe("The task list to delete: an id (preferred) or a title from list_task_lists. '@default' is rejected: the default list cannot be deleted."),
+  list: z.string().min(1).describe("The task list to delete: an id (preferred) or a title from list_task_lists. '@default' is rejected: Google's own default list cannot be deleted."),
 });
 
 export type ListTasksArgs = z.output<typeof listTasksArgs>;
-export type TaskRefArgs = z.output<typeof taskRefArgs>;
-export type SetTaskStatusArgs = z.output<typeof setTaskStatusArgs>;
+export type TaskRefArgs = z.output<ReturnType<typeof taskRefArgs>>;
+export type SetTaskStatusArgs = z.output<ReturnType<typeof setTaskStatusArgs>>;
 export type GetTaskListArgs = z.output<typeof getTaskListArgs>;
-export type MoveTaskArgs = z.output<typeof moveTaskArgs>;
+export type MoveTaskArgs = z.output<ReturnType<typeof moveTaskArgs>>;
 export type ClearCompletedTasksArgs = z.output<typeof clearCompletedTasksArgs>;
-export type CreateTaskArgs = z.output<typeof createTaskArgs>;
-export type UpdateTaskArgs = z.output<typeof updateTaskArgs>;
+export type CreateTaskArgs = z.output<ReturnType<typeof createTaskArgs>>;
+export type UpdateTaskArgs = z.output<ReturnType<typeof updateTaskArgs>>;
 export type CreateTaskListArgs = z.output<typeof createTaskListArgs>;
 export type RenameTaskListArgs = z.output<typeof renameTaskListArgs>;
 export type DeleteTaskListArgs = z.output<typeof deleteTaskListArgs>;
 
 // ---- shared ----
 
-// The list a call addresses: Google's default list (no lookup needed), or a title / id to resolve.
-export type ListTarget = { readonly kind: 'default' } | { readonly kind: 'named'; readonly name: string };
+// A list the caller named: Google's default list ('@default', no lookup needed), or a title / id to resolve.
+export type ExplicitListTarget = { readonly kind: 'default' } | { readonly kind: 'named'; readonly name: string };
+
+// The list a single-task call addresses: a named one, or — `list` omitted — the server's configured default list
+// (ToolDeps.defaultTaskList, resolved by the handler like a title / id).
+export type ListTarget = ExplicitListTarget | { readonly kind: 'configuredDefault' };
 
 // A core input without its task list, and the list it goes to once resolved.
 export type Targeted<T> = { readonly list: ListTarget; readonly input: Omit<T, 'taskListId'> };
 
-const toListTarget = (list: string | undefined): ListTarget => (list === undefined || list === DEFAULT_TASK_LIST_ID ? { kind: 'default' } : { kind: 'named', name: list });
+const toExplicitListTarget = (list: string): ExplicitListTarget => (list === DEFAULT_TASK_LIST_ID ? { kind: 'default' } : { kind: 'named', name: list });
+
+const toListTarget = (list: string | undefined): ListTarget => (list === undefined ? { kind: 'configuredDefault' } : toExplicitListTarget(list));
 
 const parseOptionalDate = (arg: string, value: string | undefined): Result<string | undefined, InvalidInputError> => (value === undefined ? ok(undefined) : parseDate(arg, value));
 
@@ -162,7 +177,7 @@ export type ListTasksOptions = Omit<ListTasksInput, 'taskListId' | 'page'>;
 // Without `list` every list is read (first page each); a page token only continues one list.
 export type ListTasksQuery =
   | { readonly kind: 'all'; readonly options: ListTasksOptions }
-  | { readonly kind: 'one'; readonly list: ListTarget; readonly page: TaskPageRequest; readonly options: ListTasksOptions };
+  | { readonly kind: 'one'; readonly list: ExplicitListTarget; readonly page: TaskPageRequest; readonly options: ListTasksOptions };
 
 const toDueFilter = (dueMin: string | undefined, dueMax: string | undefined): Result<TaskDueFilter, InvalidInputError> => {
   if (dueMin === undefined) return ok(dueMax === undefined ? { kind: 'any' } : { kind: 'until', dueMax });
@@ -202,7 +217,7 @@ const toCompletedAtFilter = (args: ListTasksArgs): Result<CompletedAtFilter, Inv
   );
 
 const toScope = (args: ListTasksArgs, options: ListTasksOptions): Result<ListTasksQuery, InvalidInputError> => {
-  if (args.list !== undefined) return ok({ kind: 'one', list: toListTarget(args.list), page: toPageRequest(args.pageToken), options });
+  if (args.list !== undefined) return ok({ kind: 'one', list: toExplicitListTarget(args.list), page: toPageRequest(args.pageToken), options });
   if (args.pageToken === undefined) return ok({ kind: 'all', options });
   return err(
     new InvalidInputError(
@@ -287,7 +302,7 @@ export const toUpdateTaskInput = (args: UpdateTaskArgs): Result<Targeted<UpdateT
 // ---- move ----
 
 // Where move_task takes the task: its own list, or another one still to be resolved.
-export type MoveDestinationTarget = { readonly kind: 'sameList' } | { readonly kind: 'otherList'; readonly list: ListTarget };
+export type MoveDestinationTarget = { readonly kind: 'sameList' } | { readonly kind: 'otherList'; readonly list: ExplicitListTarget };
 
 // A move with its source list and destination still unresolved.
 export type MoveTaskRequest = {
@@ -296,10 +311,11 @@ export type MoveTaskRequest = {
   readonly input: Omit<MoveTaskInput, 'taskListId' | 'destination'>;
 };
 
-// Naming the source list again as the destination is a move within the list.
+// Naming the source list again as the destination is a move within the list. An omitted source (the configured
+// default list) is never equal here: the handler compares the resolved ids instead.
 const toMoveDestination = (args: MoveTaskArgs): MoveDestinationTarget => {
   if (args.destinationList === undefined) return { kind: 'sameList' };
-  const [source, destination] = [toListTarget(args.list), toListTarget(args.destinationList)];
+  const [source, destination] = [toListTarget(args.list), toExplicitListTarget(args.destinationList)];
   const same = (source.kind === 'default' && destination.kind === 'default') || (source.kind === 'named' && destination.kind === 'named' && source.name === destination.name);
   return same ? { kind: 'sameList' } : { kind: 'otherList', list: destination };
 };
@@ -321,12 +337,12 @@ export const toMoveTaskRequest = (args: MoveTaskArgs): Result<MoveTaskRequest, I
 export const toCreateTaskListInput = (args: CreateTaskListArgs): Result<CreateTaskListInput, InvalidInputError> => validateTaskListTitle(args.title).map((title) => ({ title }));
 
 export const toRenameTaskListInput = (args: RenameTaskListArgs): Result<Targeted<RenameTaskListInput>, InvalidInputError> =>
-  validateTaskListTitle(args.title).map((title) => ({ list: toListTarget(args.list), input: { title } }));
+  validateTaskListTitle(args.title).map((title) => ({ list: toExplicitListTarget(args.list), input: { title } }));
 
-export const toGetTaskListTarget = (args: GetTaskListArgs): ListTarget => toListTarget(args.list);
+export const toGetTaskListTarget = (args: GetTaskListArgs): ExplicitListTarget => toExplicitListTarget(args.list);
 
 // The list whose completed tasks to clear (never blank), still to be resolved. `confirm` is checked by the schema.
-export const toClearTaskListTarget = (args: ClearCompletedTasksArgs): Result<ListTarget, InvalidInputError> => validateClearableTaskListId(args.list).map(toListTarget);
+export const toClearTaskListTarget = (args: ClearCompletedTasksArgs): Result<ExplicitListTarget, InvalidInputError> => validateClearableTaskListId(args.list).map(toExplicitListTarget);
 
 // The title or id of the list to delete, still to be resolved.
 export const toDeleteTaskListName = (args: DeleteTaskListArgs): Result<string, InvalidInputError> => validateDeletableTaskListId(args.list);

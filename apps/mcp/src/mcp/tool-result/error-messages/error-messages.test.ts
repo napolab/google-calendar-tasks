@@ -1,7 +1,7 @@
 import { GoogleAPIError, GoogleAuthError, GoogleNotFoundError, GooglePermissionError, GoogleRateLimitError, InvalidInputError } from '@napolab/gct-core/errors';
 import { describe, expect, it } from 'vitest';
 
-import { GoogleNotConnectedError, GoogleReconnectRequiredError } from '../../../errors';
+import { DefaultTaskListNotFoundError, GoogleNotConnectedError, GoogleReconnectRequiredError } from '../../../errors';
 import { MCP_TOOL_NAMES } from '../../server';
 import type { ToolError } from '../index';
 
@@ -52,6 +52,17 @@ describe('VALID_IDS_FROM ↔ MCP_TOOL_NAMES', () => {
     expect(named.length).toBeGreaterThan(0);
     const registered: readonly string[] = MCP_TOOL_NAMES;
     for (const tool of named) expect(registered).toContain(tool);
+  });
+});
+
+describe('DefaultTaskListNotFoundError ↔ MCP_TOOL_NAMES', () => {
+  it('names only registered tools, and reaches the caller as its own message', () => {
+    const error = new DefaultTaskListNotFoundError('日常タスク', ['Work']);
+    const named = error.message.match(/\b[a-z]+(?:_[a-z]+)+\b/g) ?? [];
+
+    expect(named.length).toBeGreaterThan(0);
+    expect(MCP_TOOL_NAMES).toEqual(expect.arrayContaining(named));
+    expect(describeToolError({ error, connectURL: CONNECT_URL, resource: 'tasks' })).toBe(error.message);
   });
 });
 

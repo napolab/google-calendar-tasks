@@ -2,6 +2,8 @@ import { okAsync } from 'neverthrow';
 import { describe, expect, it } from 'vitest';
 
 import { readRPCBody, toolText } from '../../test-support';
+import { buildServerInstructions } from '../server-instructions';
+import { TOOL_TIME_ZONE } from '../time-input';
 import { MCP_TOOL_NAMES, serveMCP } from './index';
 
 import type { ToolDeps } from '../tool-deps';
@@ -60,7 +62,7 @@ const tasks: ITasksService = {
   clearCompletedTasks: unexpected,
 };
 
-const deps: ToolDeps = { services: { calendar, tasks }, now: () => 0, connectURL: 'https://gct.example.com/google/connect' };
+const deps: ToolDeps = { services: { calendar, tasks }, now: () => 0, connectURL: 'https://gct.example.com/google/connect', defaultTaskList: '日常タスク' };
 
 const assets = { taskBoard: { html: '<!doctype html><title>board</title>' } };
 
@@ -88,6 +90,17 @@ describe('serveMCP', () => {
     });
 
     expect(body).toMatchObject({ id: 1, result: { serverInfo: { name: 'gct' } } });
+  });
+
+  it('answers initialize with the instructions built from the configured defaults', async () => {
+    const body = await call({
+      jsonrpc: '2.0',
+      id: 8,
+      method: 'initialize',
+      params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'test', version: '0' } },
+    });
+
+    expect(body.result.instructions).toBe(buildServerInstructions({ defaultTaskList: '日常タスク', timeZone: TOOL_TIME_ZONE }));
   });
 
   it('lists every calendar and tasks tool', async () => {

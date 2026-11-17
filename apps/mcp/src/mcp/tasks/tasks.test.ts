@@ -18,7 +18,11 @@ const CONNECT_URL = 'https://gct.example.com/google/connect';
 const LISTS: TaskListSummary[] = [
   { id: 'l-default', title: 'My Tasks', updated: 'u' },
   { id: 'l-work', title: 'Work', updated: 'u' },
+  { id: 'l-daily', title: '日常タスク', updated: 'u' },
 ];
+
+// The server's configured default list (DEFAULT_TASK_LIST): used whenever a single-task tool is called without list.
+const DEFAULT_TASK_LIST = '日常タスク';
 
 const task = (taskListId: string, id = 't1'): Task => ({
   status: 'needsAction',
@@ -72,7 +76,7 @@ const calendar: ICalendarService = {
   getSetting: unexpected,
 };
 
-const handlersWith = (overrides: Partial<ITasksService>) => {
+const handlersWith = (overrides: Partial<ITasksService>, defaultTaskList = DEFAULT_TASK_LIST) => {
   const calls: { method: string; input: unknown }[] = [];
   // Task list lookups (tasklists.get / tasklists.list), kept apart from the operations in `calls`.
   const lookups: string[] = [];
@@ -109,7 +113,7 @@ const handlersWith = (overrides: Partial<ITasksService>) => {
     deleteTaskList: record('deleteTaskList', () => okAsync(undefined)),
     ...overrides,
   };
-  const deps: ToolDeps = { services: { calendar, tasks }, now: () => 0, connectURL: CONNECT_URL };
+  const deps: ToolDeps = { services: { calendar, tasks }, now: () => 0, connectURL: CONNECT_URL, defaultTaskList };
   return { handlers: createTasksToolHandlers(deps), calls, lookups };
 };
 
@@ -140,6 +144,7 @@ describe('tasks tools', () => {
       lists: [
         { taskListId: 'l-default', title: 'My Tasks', tasks: [{ id: 't1', taskListId: 'l-default' }], nextPageToken: null },
         { taskListId: 'l-work', title: 'Work', tasks: [{ id: 't1', taskListId: 'l-work' }], nextPageToken: null },
+        { taskListId: 'l-daily', title: '日常タスク', tasks: [{ id: 't1', taskListId: 'l-daily' }], nextPageToken: null },
       ],
     });
     expect(calls.map((call) => call.input)).toEqual([
@@ -163,6 +168,17 @@ describe('tasks tools', () => {
         assigned: 'exclude',
         maxResults: 100,
         taskListId: 'l-work',
+        page: { kind: 'first' },
+      },
+      {
+        due: { kind: 'any' },
+        completed: 'include',
+        completedAt: { kind: 'any' },
+        updated: { kind: 'any' },
+        deleted: 'exclude',
+        assigned: 'exclude',
+        maxResults: 100,
+        taskListId: 'l-daily',
         page: { kind: 'first' },
       },
     ]);
@@ -231,12 +247,56 @@ describe('tasks tools', () => {
     expect(calls).toEqual([]);
   });
 
-  it('uses @default without a lookup', async () => {
+  it("passes an explicit '@default' through as Google's default list without a lookup", async () => {
     const { handlers, calls, lookups } = handlersWith({ listTaskLists: unexpected, getTaskList: unexpected });
 
-    expect(jsonOf(await handlers.createTask({ title: 'Buy milk' }))).toMatchObject({ taskListId: '@default' });
+    expect(jsonOf(await handlers.createTask({ title: 'Buy milk', list: '@default' }))).toMatchObject({ taskListId: '@default' });
     expect(calls).toEqual([{ method: 'createTask', input: { title: 'Buy milk', notes: '', due: { kind: 'none' }, placement: { kind: 'root', position: { kind: 'first' } }, taskListId: '@default' } }]);
     expect(lookups).toEqual([]);
+  });
+
+  it('uses the configured default list (a title) when list is omitted', async () => {
+    const { handlers, calls, lookups } = handlersWith({});
+
+    expect(jsonOf(await handlers.createTask({ title: 'Buy milk' }))).toMatchObject({ taskListId: 'l-daily' });
+    expect(calls).toEqual([{ method: 'createTask', input: { title: 'Buy milk', notes: '', due: { kind: 'none' }, placement: { kind: 'root', position: { kind: 'first' } }, taskListId: 'l-daily' } }]);
+    expect(lookups).toEqual(['getTaskList 日常タスク', 'listTaskLists']);
+  });
+
+  it('uses the configured default list (an id) with one GET when list is omitted', async () => {
+    const { handlers, calls, lookups } = handlersWith({ listTaskLists: unexpected }, 'l-work');
+
+    jsonOf(await handlers.getTask({ taskId: 't1' }));
+
+    expect(calls).toEqual([{ method: 'getTask', input: { taskId: 't1', taskListId: 'l-work' } }]);
+    expect(lookups).toEqual(['getTaskList l-work']);
+  });
+
+  it("uses Google's default list when the configured default list is '@default'", async () => {
+    const { handlers, calls } = handlersWith({}, '@default');
+
+    jsonOf(await handlers.completeTask({ taskId: 't1' }));
+
+    expect(calls).toEqual([{ method: 'completeTask', input: { taskId: 't1', taskListId: 'l-default' } }]);
+  });
+
+  it('explains a configured default list that does not exist, and calls nothing', async () => {
+    const { handlers, calls } = handlersWith({}, 'Daily');
+
+    for (const result of [
+      await handlers.createTask({ title: 'x' }),
+      await handlers.getTask({ taskId: 't1' }),
+      await handlers.setTaskStatus({ taskId: 't1', status: 'done' }),
+      await handlers.moveTask({ taskId: 't1', previousId: 's1' }),
+    ]) {
+      const text = errorTextOf(result);
+      expect(text).toContain('list was omitted');
+      expect(text).toContain('"Daily"');
+      expect(text).toContain('"Work"');
+      expect(text).toContain('list_task_lists');
+      expect(text).toContain("'@default'");
+    }
+    expect(calls).toEqual([]);
   });
 
   it('update / complete / reopen / delete address the resolved list', async () => {
@@ -250,7 +310,7 @@ describe('tasks tools', () => {
     expect(calls.map((call) => [call.method, call.input])).toEqual([
       ['updateTask', { taskId: 't1', title: { kind: 'set', value: 'New' }, notes: { kind: 'keep' }, due: { kind: 'keep' }, taskListId: 'l-work' }],
       ['completeTask', { taskId: 't1', taskListId: 'l-work' }],
-      ['reopenTask', { taskId: 't1', taskListId: '@default' }],
+      ['reopenTask', { taskId: 't1', taskListId: 'l-daily' }],
       ['deleteTask', { taskId: 't1', taskListId: 'l-work' }],
     ]);
   });
@@ -284,8 +344,8 @@ describe('tasks tools', () => {
     jsonOf(await handlers.setTaskStatus({ taskId: 't1', status: 'done' }));
 
     expect(calls.map((call) => [call.method, call.input])).toEqual([
-      ['completeTask', { taskId: 't1', taskListId: '@default' }],
-      ['updateTask', { taskId: 't1', taskListId: '@default', title: { kind: 'keep' }, notes: { kind: 'set', value: '[status: done]' }, due: { kind: 'keep' } }],
+      ['completeTask', { taskId: 't1', taskListId: 'l-daily' }],
+      ['updateTask', { taskId: 't1', taskListId: 'l-daily', title: { kind: 'keep' }, notes: { kind: 'set', value: '[status: done]' }, due: { kind: 'keep' } }],
     ]);
   });
 
@@ -447,8 +507,22 @@ describe('tasks tools', () => {
   it('move_task names the available lists when the destination does not exist, and moves nothing', async () => {
     const { handlers, calls } = handlersWith({});
 
-    expect(errorTextOf(await handlers.moveTask({ taskId: 't1', destinationList: 'Nope' }))).toContain('"Work"');
+    const text = errorTextOf(await handlers.moveTask({ taskId: 't1', destinationList: 'Nope' }));
+    expect(text).toContain('"Nope"');
+    expect(text).toContain('"Work"');
+    expect(text).not.toContain('list was omitted');
     expect(calls).toEqual([]);
+  });
+
+  it('move_task without list moves the task out of the configured default list', async () => {
+    const { handlers, calls, lookups } = handlersWith({});
+
+    jsonOf(await handlers.moveTask({ taskId: 't1', destinationList: 'Work' }));
+
+    expect(lookups).toEqual(['getTaskList 日常タスク', 'getTaskList Work', 'listTaskLists']);
+    expect(calls).toEqual([
+      { method: 'moveTask', input: { taskId: 't1', taskListId: 'l-daily', destination: { kind: 'otherList', taskListId: 'l-work' }, placement: { kind: 'root', position: { kind: 'first' } } } },
+    ]);
   });
 
   it('clear_completed_tasks clears the resolved list and reports which list was cleared', async () => {
@@ -476,6 +550,7 @@ const toolsListSchema = z.object({
     tools: z.array(
       z.object({
         name: z.string(),
+        description: z.string().optional(),
         annotations: z.object({ readOnlyHint: z.boolean().optional(), destructiveHint: z.boolean().optional(), idempotentHint: z.boolean().optional() }).optional(),
       }),
     ),
@@ -501,7 +576,7 @@ const unusedTasks: ITasksService = {
 };
 
 const listTasksTools = async () => {
-  const deps: ToolDeps = { services: { calendar, tasks: unusedTasks }, now: () => 0, connectURL: CONNECT_URL };
+  const deps: ToolDeps = { services: { calendar, tasks: unusedTasks }, now: () => 0, connectURL: CONNECT_URL, defaultTaskList: DEFAULT_TASK_LIST };
   const server = new McpServer({ name: 'test', version: '0' }, { jsonSchemaValidator: new CfWorkerJsonSchemaValidator() });
   registerTasksTools(server, deps);
   const transport = new WebStandardStreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
@@ -527,5 +602,18 @@ describe('tasks tool annotations', () => {
       expect(hints[name]).toMatchObject({ readOnlyHint: false, destructiveHint: false });
     }
     expect(tools).toHaveLength(15);
+  });
+});
+
+describe('tasks tool descriptions', () => {
+  it('name the configured default list wherever list is optional', async () => {
+    const tools = await listTasksTools();
+    const descriptions = Object.fromEntries(tools.map((tool) => [tool.name, tool.description ?? '']));
+
+    for (const name of ['get_task', 'create_task', 'update_task', 'complete_task', 'reopen_task', 'set_task_status', 'move_task', 'delete_task']) {
+      expect(descriptions[name]).toContain(`"${DEFAULT_TASK_LIST}"`);
+    }
+    for (const description of Object.values(descriptions)) expect(description).not.toContain("the user's default list");
+    expect(descriptions['list_tasks']).toContain('EVERY list');
   });
 });

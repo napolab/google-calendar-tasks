@@ -76,6 +76,7 @@ const setup = (options: { grantedScope?: string; refresh?: RefreshOutcome; verif
     GOOGLE_CLIENT_ID: 'client-1',
     GOOGLE_CLIENT_SECRET: 'secret-1',
     GOOGLE_REDIRECT_URI: REDIRECT_URI,
+    DEFAULT_TASK_LIST: '日常タスク',
     GOOGLE_TOKEN_STORE: {
       getByName: (name) => {
         const existing = stores.get(name);
@@ -276,6 +277,16 @@ describe('POST /google/disconnect', () => {
 });
 
 describe('/mcp', () => {
+  it('names the DEFAULT_TASK_LIST binding in the server instructions', async () => {
+    const { request } = setup({ env: { DEFAULT_TASK_LIST: 'Daily' } });
+
+    const body = await readRPCBody(
+      await mcp(request, { jsonrpc: '2.0', id: 9, method: 'initialize', params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'test', version: '0' } } }),
+    );
+
+    expect(body.result.instructions).toContain('"Daily"');
+  });
+
   it('lists the tools', async () => {
     const { request } = setup();
 

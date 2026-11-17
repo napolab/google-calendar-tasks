@@ -2,8 +2,10 @@ import { McpServer, WebStandardStreamableHTTPServerTransport } from '@modelconte
 import { CfWorkerJsonSchemaValidator } from '@modelcontextprotocol/server/validators/cf-worker';
 
 import { registerCalendarTools } from '../calendar';
+import { buildServerInstructions } from '../server-instructions';
 import { registerTaskBoardApp } from '../task-board';
 import { registerTasksTools } from '../tasks';
+import { TOOL_TIME_ZONE } from '../time-input';
 
 import type { TaskBoardAssets } from '../task-board';
 import type { ToolDeps } from '../tool-deps';
@@ -61,9 +63,13 @@ export const MCP_TOOL_NAMES = [
 export type McpAppAssets = { readonly taskBoard: TaskBoardAssets };
 
 // The JSON Schema validator is injected explicitly: the SDK's default is chosen by build-time export conditions and
-// may resolve to Ajv, which compiles schemas with `new Function` — forbidden on Workers.
+// may resolve to Ajv, which compiles schemas with `new Function` — forbidden on Workers. `instructions` (sent in the
+// initialize result) states the defaults the tools apply: time zone, no guest emails, the default task list.
 export const createMCPServer = (deps: ToolDeps, assets: McpAppAssets): McpServer => {
-  const server = new McpServer({ name: 'gct', version: '0.1.0' }, { jsonSchemaValidator: new CfWorkerJsonSchemaValidator() });
+  const server = new McpServer(
+    { name: 'gct', version: '0.1.0' },
+    { jsonSchemaValidator: new CfWorkerJsonSchemaValidator(), instructions: buildServerInstructions({ defaultTaskList: deps.defaultTaskList, timeZone: TOOL_TIME_ZONE }) },
+  );
   registerCalendarTools(server, deps);
   registerTasksTools(server, deps);
   registerTaskBoardApp(server, deps, assets.taskBoard);

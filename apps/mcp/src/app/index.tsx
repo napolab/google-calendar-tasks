@@ -58,7 +58,9 @@ export const createApp = (deps: AppDeps) => {
       ),
     )
     .route('/google', createGoogleRoutes(deps))
-    .on(['GET', 'POST', 'DELETE'], '/mcp', (c) => serveMCP(c.req.raw, { services: c.var.services, now: deps.now, connectURL: new URL('/google/connect', c.req.url).href }, deps.mcpAppAssets));
+    .on(['GET', 'POST', 'DELETE'], '/mcp', (c) =>
+      serveMCP(c.req.raw, { services: c.var.services, now: deps.now, connectURL: new URL('/google/connect', c.req.url).href, defaultTaskList: c.env.DEFAULT_TASK_LIST }, deps.mcpAppAssets),
+    );
 };
 
 export type AppType = ReturnType<typeof createApp>;

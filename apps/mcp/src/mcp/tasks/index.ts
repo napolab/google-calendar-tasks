@@ -1,6 +1,8 @@
+import { TaskListNotFoundError } from '@napolab/gct-core/errors';
 import { DEFAULT_TASK_LIST_ID, findTaskList, lookupTaskListByID, setTaskBoardStatus, settleTaskListLookup } from '@napolab/gct-core/tasks';
 import { ResultAsync, ok as okResult, okAsync } from 'neverthrow';
 
+import { DefaultTaskListNotFoundError } from '../../errors';
 import { ok, toToolError } from '../tool-result';
 import {
   clearCompletedTasksArgs,
@@ -35,6 +37,7 @@ import type {
   CreateTaskArgs,
   CreateTaskListArgs,
   DeleteTaskListArgs,
+  ExplicitListTarget,
   GetTaskListArgs,
   ListTarget,
   ListTasksArgs,
@@ -61,12 +64,20 @@ import type { Result } from 'neverthrow';
 // A title or id → the whole list (for tools that report which list they acted on).
 const resolveNamedTaskList = (tasks: ITasksService, name: string): ResultAsync<TaskListSummary, ToolError> => findTaskList(tasks, name);
 
-const resolveListTarget = (tasks: ITasksService, target: ListTarget): ResultAsync<string, ToolError> => {
+// The caller did not name the configured default list, so "no such list" is reworded to say where the name came from.
+const explainDefaultListMiss = (error: ToolError): ToolError => (error instanceof TaskListNotFoundError ? new DefaultTaskListNotFoundError(error.query, error.titles) : error);
+
+// The configured default list (ToolDeps.defaultTaskList): a title or an id, looked up like a named list.
+const resolveConfiguredDefault = (tasks: ITasksService, defaultTaskList: string): ResultAsync<TaskListSummary, ToolError> => findTaskList(tasks, defaultTaskList).mapErr(explainDefaultListMiss);
+
+const resolveListTarget = (tasks: ITasksService, target: ListTarget, defaultTaskList: string): ResultAsync<string, ToolError> => {
   switch (target.kind) {
     case 'default':
       return okAsync(DEFAULT_TASK_LIST_ID);
     case 'named':
       return resolveNamedTaskList(tasks, target.name).map((list) => list.id);
+    case 'configuredDefault':
+      return resolveConfiguredDefault(tasks, defaultTaskList).map((list) => list.id);
     default: {
       const _exhaustive: never = target;
       throw new Error(`unhandled list target: ${JSON.stringify(_exhaustive)}`);
@@ -75,11 +86,11 @@ const resolveListTarget = (tasks: ITasksService, target: ListTarget): ResultAsyn
 };
 
 // The core input with its list resolved to an id.
-const resolveTargeted = <T extends object>(tasks: ITasksService, targeted: Targeted<T>): ResultAsync<Omit<T, 'taskListId'> & { readonly taskListId: string }, ToolError> =>
-  resolveListTarget(tasks, targeted.list).map((taskListId) => ({ ...targeted.input, taskListId }));
+const resolveTargeted = <T extends object>(tasks: ITasksService, targeted: Targeted<T>, defaultTaskList: string): ResultAsync<Omit<T, 'taskListId'> & { readonly taskListId: string }, ToolError> =>
+  resolveListTarget(tasks, targeted.list, defaultTaskList).map((taskListId) => ({ ...targeted.input, taskListId }));
 
 // The whole list a target names: '@default' is read with tasklists.get (its real id and title), a title / id is looked up.
-export const resolveListSummary = (tasks: ITasksService, target: ListTarget): ResultAsync<TaskListSummary, ToolError> => {
+export const resolveListSummary = (tasks: ITasksService, target: ExplicitListTarget): ResultAsync<TaskListSummary, ToolError> => {
   switch (target.kind) {
     case 'default':
       return tasks.getTaskList({ taskListId: DEFAULT_TASK_LIST_ID });
@@ -94,17 +105,20 @@ export const resolveListSummary = (tasks: ITasksService, target: ListTarget): Re
 
 // ---- move_task: each named list is read by id first; titles left over share one listTaskLists call ----
 
-// The source after its lookup: '@default' passes through as Google's alias, a name has been read by id.
-type SourceLookup = { readonly kind: 'alias' } | TaskListLookup;
+// The source after its lookup: '@default' passes through as Google's alias; a name — given, or the configured default
+// list when `list` was omitted — has been read by id.
+type SourceLookup = { readonly kind: 'alias' } | { readonly kind: 'named'; readonly lookup: TaskListLookup } | { readonly kind: 'configuredDefault'; readonly lookup: TaskListLookup };
 
 type DestinationLookup = { readonly kind: 'sameList' } | { readonly kind: 'otherList'; readonly lookup: TaskListLookup };
 
-const lookupSource = (tasks: ITasksService, target: ListTarget): ResultAsync<SourceLookup, ToolError> => {
+const lookupSource = (tasks: ITasksService, target: ListTarget, defaultTaskList: string): ResultAsync<SourceLookup, ToolError> => {
   switch (target.kind) {
     case 'default':
       return okAsync({ kind: 'alias' });
     case 'named':
-      return lookupTaskListByID(tasks, target.name);
+      return lookupTaskListByID(tasks, target.name).map((lookup): SourceLookup => ({ kind: 'named', lookup }));
+    case 'configuredDefault':
+      return lookupTaskListByID(tasks, defaultTaskList).map((lookup): SourceLookup => ({ kind: 'configuredDefault', lookup }));
     default: {
       const _exhaustive: never = target;
       throw new Error(`unhandled list target: ${JSON.stringify(_exhaustive)}`);
@@ -113,7 +127,7 @@ const lookupSource = (tasks: ITasksService, target: ListTarget): ResultAsync<Sou
 };
 
 // destinationTasklist is not documented to take '@default', so the default list is read for its real id.
-const destinationQuery = (target: ListTarget): string => {
+const destinationQuery = (target: ExplicitListTarget): string => {
   switch (target.kind) {
     case 'default':
       return DEFAULT_TASK_LIST_ID;
@@ -139,7 +153,7 @@ const lookupDestination = (tasks: ITasksService, destination: MoveDestinationTar
   }
 };
 
-const sourceNeedsTitles = (source: SourceLookup): boolean => source.kind === 'notAnID';
+const sourceNeedsTitles = (source: SourceLookup): boolean => source.kind !== 'alias' && source.lookup.kind === 'notAnID';
 
 const destinationNeedsTitles = (destination: DestinationLookup): boolean => destination.kind === 'otherList' && destination.lookup.kind === 'notAnID';
 
@@ -150,9 +164,12 @@ const settleSource = (lists: readonly TaskListSummary[], source: SourceLookup): 
   switch (source.kind) {
     case 'alias':
       return okResult(DEFAULT_TASK_LIST_ID);
-    case 'found':
-    case 'notAnID':
-      return settleTaskListLookup(lists, source).map((list) => list.id);
+    case 'named':
+      return settleTaskListLookup(lists, source.lookup).map((list) => list.id);
+    case 'configuredDefault':
+      return settleTaskListLookup(lists, source.lookup)
+        .mapErr(explainDefaultListMiss)
+        .map((list) => list.id);
     default: {
       const _exhaustive: never = source;
       throw new Error(`unhandled source lookup: ${JSON.stringify(_exhaustive)}`);
@@ -178,8 +195,8 @@ const settleDestination = (lists: readonly TaskListSummary[], sourceId: string, 
 
 type MoveLookups = { readonly source: SourceLookup; readonly destination: DestinationLookup };
 
-const lookupMove = (tasks: ITasksService, request: MoveTaskRequest): ResultAsync<MoveLookups, ToolError> =>
-  lookupSource(tasks, request.list).andThen((source) => lookupDestination(tasks, request.destination).map((destination) => ({ source, destination })));
+const lookupMove = (tasks: ITasksService, request: MoveTaskRequest, defaultTaskList: string): ResultAsync<MoveLookups, ToolError> =>
+  lookupSource(tasks, request.list, defaultTaskList).andThen((source) => lookupDestination(tasks, request.destination).map((destination) => ({ source, destination })));
 
 const needsTitles = (lookups: MoveLookups): boolean => sourceNeedsTitles(lookups.source) || destinationNeedsTitles(lookups.destination);
 
@@ -188,8 +205,8 @@ const settleMove = (request: MoveTaskRequest, lists: readonly TaskListSummary[],
     settleDestination(lists, taskListId, lookups.destination).map((destination): MoveTaskInput => ({ ...request.input, taskListId, destination })),
   );
 
-const resolveMove = (tasks: ITasksService, request: MoveTaskRequest): ResultAsync<MoveTaskInput, ToolError> =>
-  lookupMove(tasks, request).andThen((lookups) => listsFor(tasks, needsTitles(lookups)).andThen((lists) => settleMove(request, lists, lookups)));
+const resolveMove = (tasks: ITasksService, request: MoveTaskRequest, defaultTaskList: string): ResultAsync<MoveTaskInput, ToolError> =>
+  lookupMove(tasks, request, defaultTaskList).andThen((lookups) => listsFor(tasks, needsTitles(lookups)).andThen((lists) => settleMove(request, lists, lookups)));
 
 // list_tasks always answers `{ lists }`: one entry per list read (exactly one when `list` is given).
 export type TasksListing = { readonly lists: readonly TaskListPageView[] };
@@ -224,6 +241,7 @@ export const readTasksListing = (tasks: ITasksService, args: ListTasksArgs): Res
 
 export const createTasksToolHandlers = (deps: ToolDeps) => {
   const { tasks } = deps.services;
+  const { defaultTaskList } = deps;
   const fail = toToolError(deps.connectURL, 'tasks');
 
   return {
@@ -237,47 +255,47 @@ export const createTasksToolHandlers = (deps: ToolDeps) => {
 
     createTask: (args: CreateTaskArgs): Promise<ToolResult> =>
       toCreateTaskInput(args)
-        .asyncAndThen((targeted) => resolveTargeted(tasks, targeted))
+        .asyncAndThen((targeted) => resolveTargeted(tasks, targeted, defaultTaskList))
         .andThen((input) => tasks.createTask(input))
         .map(toTaskView)
         .match(ok, fail),
 
     updateTask: (args: UpdateTaskArgs): Promise<ToolResult> =>
       toUpdateTaskInput(args)
-        .asyncAndThen((targeted) => resolveTargeted(tasks, targeted))
+        .asyncAndThen((targeted) => resolveTargeted(tasks, targeted, defaultTaskList))
         .andThen((input) => tasks.updateTask(input))
         .map(toTaskView)
         .match(ok, fail),
 
     completeTask: (args: TaskRefArgs): Promise<ToolResult> =>
-      resolveTargeted(tasks, toTaskRef(args))
+      resolveTargeted(tasks, toTaskRef(args), defaultTaskList)
         .andThen((ref) => tasks.completeTask(ref))
         .map(toTaskView)
         .match(ok, fail),
 
     reopenTask: (args: TaskRefArgs): Promise<ToolResult> =>
-      resolveTargeted(tasks, toTaskRef(args))
+      resolveTargeted(tasks, toTaskRef(args), defaultTaskList)
         .andThen((ref) => tasks.reopenTask(ref))
         .map(toTaskView)
         .match(ok, fail),
 
     setTaskStatus: (args: SetTaskStatusArgs): Promise<ToolResult> => {
       const change = toTaskStatusChange(args);
-      return resolveTargeted(tasks, change.ref)
+      return resolveTargeted(tasks, change.ref, defaultTaskList)
         .andThen((ref) => setTaskBoardStatus(tasks, ref, change.status))
         .map(toTaskView)
         .match(ok, fail);
     },
 
     getTask: (args: TaskRefArgs): Promise<ToolResult> =>
-      resolveTargeted(tasks, toTaskRef(args))
+      resolveTargeted(tasks, toTaskRef(args), defaultTaskList)
         .andThen((ref) => tasks.getTask(ref))
         .map(toTaskView)
         .match(ok, fail),
 
     moveTask: (args: MoveTaskArgs): Promise<ToolResult> =>
       toMoveTaskRequest(args)
-        .asyncAndThen((request) => resolveMove(tasks, request))
+        .asyncAndThen((request) => resolveMove(tasks, request, defaultTaskList))
         .andThen((input) => tasks.moveTask(input))
         .map(toTaskView)
         .match(ok, fail),
@@ -289,7 +307,7 @@ export const createTasksToolHandlers = (deps: ToolDeps) => {
         .match(ok, fail),
 
     deleteTask: (args: TaskRefArgs): Promise<ToolResult> =>
-      resolveTargeted(tasks, toTaskRef(args))
+      resolveTargeted(tasks, toTaskRef(args), defaultTaskList)
         .andThen((ref) => tasks.deleteTask(ref).map(() => ({ deleted: true, taskListId: ref.taskListId, taskId: ref.taskId })))
         .match(ok, fail),
 
@@ -303,7 +321,7 @@ export const createTasksToolHandlers = (deps: ToolDeps) => {
 
     renameTaskList: (args: RenameTaskListArgs): Promise<ToolResult> =>
       toRenameTaskListInput(args)
-        .asyncAndThen((targeted) => resolveTargeted(tasks, targeted))
+        .asyncAndThen((targeted) => resolveTargeted(tasks, targeted, defaultTaskList))
         .andThen((input) => tasks.renameTaskList(input))
         .map(toTaskListView)
         .match(ok, fail),
@@ -316,7 +334,9 @@ export const createTasksToolHandlers = (deps: ToolDeps) => {
   };
 };
 
-const LIST_HELP = "list is a task list id or title (from list_task_lists) or '@default'; default: the user's default list.";
+// Quoted in every tool whose `list` is optional: omitted means the configured default list.
+const listHelp = (defaultTaskList: string): string =>
+  `list is a task list id or title (from list_task_lists) or '@default' (Google's own default list); omitted: the "${defaultTaskList}" list. For a task found with list_tasks, pass the taskListId it was listed under.`;
 
 // The status-tag template (core tasks/status-tag), quoted in every tool that reads or writes notes.
 const STATUS_TAG_HELP =
@@ -324,6 +344,8 @@ const STATUS_TAG_HELP =
 
 export const registerTasksTools = (server: McpServer, deps: ToolDeps): void => {
   const handlers = createTasksToolHandlers(deps);
+  const listHelpText = listHelp(deps.defaultTaskList);
+  const taskRefSchema = taskRefArgs(deps.defaultTaskList);
 
   server.registerTool(
     'list_task_lists',
@@ -346,8 +368,8 @@ export const registerTasksTools = (server: McpServer, deps: ToolDeps): void => {
     'get_task',
     {
       title: 'Get task',
-      description: `Get one task by id with its notes, due day, parent, position, links, deleted / hidden flags and assignment source. ${STATUS_TAG_HELP} ${LIST_HELP}`,
-      inputSchema: taskRefArgs,
+      description: `Get one task by id with its notes, due day, parent, position, links, deleted / hidden flags and assignment source. ${STATUS_TAG_HELP} ${listHelpText}`,
+      inputSchema: taskRefSchema,
       annotations: { readOnlyHint: true },
     },
     handlers.getTask,
@@ -357,8 +379,8 @@ export const registerTasksTools = (server: McpServer, deps: ToolDeps): void => {
     'create_task',
     {
       title: 'Create task',
-      description: `Create a task. due is a day (YYYY-MM-DD; Google Tasks has no due time). parentId makes it a subtask; previousId places it after a sibling. status ('todo' / 'doing') writes the board status tag as the first line of the notes. ${LIST_HELP}`,
-      inputSchema: createTaskArgs,
+      description: `Create a task. due is a day (YYYY-MM-DD; Google Tasks has no due time). parentId makes it a subtask; previousId places it after a sibling. status ('todo' / 'doing') writes the board status tag as the first line of the notes. ${listHelpText}`,
+      inputSchema: createTaskArgs(deps.defaultTaskList),
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false },
     },
     handlers.createTask,
@@ -368,8 +390,8 @@ export const registerTasksTools = (server: McpServer, deps: ToolDeps): void => {
     'update_task',
     {
       title: 'Update task',
-      description: `Change a task's title, notes or due day. Omitted fields are kept; remove notes / due with clearNotes / clearDue: true (never an empty string). notes replaces the RAW notes: keep the first-line '[status: …]' tag when the task has one (copy it from get_task's notes), or the task drops back to todo on the board. Use set_task_status (or complete_task / reopen_task) for the status. ${LIST_HELP}`,
-      inputSchema: updateTaskArgs,
+      description: `Change a task's title, notes or due day. Omitted fields are kept; remove notes / due with clearNotes / clearDue: true (never an empty string). notes replaces the RAW notes: keep the first-line '[status: …]' tag when the task has one (copy it from get_task's notes), or the task drops back to todo on the board. Use set_task_status (or complete_task / reopen_task) for the status. ${listHelpText}`,
+      inputSchema: updateTaskArgs(deps.defaultTaskList),
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
     },
     handlers.updateTask,
@@ -377,7 +399,7 @@ export const registerTasksTools = (server: McpServer, deps: ToolDeps): void => {
 
   server.registerTool(
     'complete_task',
-    { title: 'Complete task', description: `Mark a task completed. ${LIST_HELP}`, inputSchema: taskRefArgs, annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true } },
+    { title: 'Complete task', description: `Mark a task completed. ${listHelpText}`, inputSchema: taskRefSchema, annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true } },
     handlers.completeTask,
   );
 
@@ -385,8 +407,8 @@ export const registerTasksTools = (server: McpServer, deps: ToolDeps): void => {
     'reopen_task',
     {
       title: 'Reopen task',
-      description: `Mark a completed task as not completed. ${LIST_HELP}`,
-      inputSchema: taskRefArgs,
+      description: `Mark a completed task as not completed. ${listHelpText}`,
+      inputSchema: taskRefSchema,
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
     },
     handlers.reopenTask,
@@ -396,8 +418,8 @@ export const registerTasksTools = (server: McpServer, deps: ToolDeps): void => {
     'set_task_status',
     {
       title: 'Set task board status',
-      description: `Move a task to a board column. 'done' completes the task and rewrites the first line of its notes to '[status: done]'; 'todo' / 'doing' reopen it (if completed) and write '[status: todo]' / '[status: doing]'. The rest of the notes is kept as is. Returns the task with its boardStatus. ${LIST_HELP}`,
-      inputSchema: setTaskStatusArgs,
+      description: `Move a task to a board column. 'done' completes the task and rewrites the first line of its notes to '[status: done]'; 'todo' / 'doing' reopen it (if completed) and write '[status: todo]' / '[status: doing]'. The rest of the notes is kept as is. Returns the task with its boardStatus. ${listHelpText}`,
+      inputSchema: setTaskStatusArgs(deps.defaultTaskList),
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
     },
     handlers.setTaskStatus,
@@ -407,9 +429,8 @@ export const registerTasksTools = (server: McpServer, deps: ToolDeps): void => {
     'move_task',
     {
       title: 'Move task',
-      description:
-        "Reorder, nest / un-nest, or move a task to another list. The placement is always rewritten: parentId makes it a subtask (omit it to put the task at the TOP LEVEL — this un-nests a subtask), previousId places it after that sibling (omit it to place it first). destinationList (id, title or '@default') moves it into another list; omit it to stay in list. Recurring tasks cannot change lists, and assigned tasks cannot be nested. Returns the moved task.",
-      inputSchema: moveTaskArgs,
+      description: `Reorder, nest / un-nest, or move a task to another list. The placement is always rewritten: parentId makes it a subtask (omit it to put the task at the TOP LEVEL — this un-nests a subtask), previousId places it after that sibling (omit it to place it first). destinationList (id, title or '@default') moves it into another list; omit it to stay in list. Recurring tasks cannot change lists, and assigned tasks cannot be nested. Returns the moved task. ${listHelpText}`,
+      inputSchema: moveTaskArgs(deps.defaultTaskList),
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
     },
     handlers.moveTask,
@@ -419,8 +440,8 @@ export const registerTasksTools = (server: McpServer, deps: ToolDeps): void => {
     'delete_task',
     {
       title: 'Delete task',
-      description: `Delete a task by id. Cannot be undone — confirm the id with list_tasks first. ${LIST_HELP}`,
-      inputSchema: taskRefArgs,
+      description: `Delete a task by id. Cannot be undone — confirm the id with list_tasks first. ${listHelpText}`,
+      inputSchema: taskRefSchema,
       annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true },
     },
     handlers.deleteTask,
@@ -442,7 +463,7 @@ export const registerTasksTools = (server: McpServer, deps: ToolDeps): void => {
     'get_task_list',
     {
       title: 'Get task list',
-      description: "Get one task list's id, title and last update. list is an id or a title from list_task_lists, or '@default' (returns the default list's real id).",
+      description: "Get one task list's id, title and last update. list is an id or a title from list_task_lists, or '@default' (returns Google's own default list with its real id).",
       inputSchema: getTaskListArgs,
       annotations: { readOnlyHint: true },
     },
@@ -477,7 +498,7 @@ export const registerTasksTools = (server: McpServer, deps: ToolDeps): void => {
     {
       title: 'Delete task list',
       description:
-        "Delete a whole task list AND EVERY TASK IN IT. Cannot be undone — call list_task_lists first and pass the exact id of the list the user asked to delete (a title also works when it is unique). The default list cannot be deleted ('@default' is rejected). Returns the deleted list.",
+        "Delete a whole task list AND EVERY TASK IN IT. Cannot be undone — call list_task_lists first and pass the exact id of the list the user asked to delete (a title also works when it is unique). Google's own default list cannot be deleted ('@default' is rejected). Returns the deleted list.",
       inputSchema: deleteTaskListArgs,
       annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true },
     },

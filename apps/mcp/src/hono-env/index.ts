@@ -13,6 +13,8 @@ export type AppBindings = AccessEnv & {
   readonly GOOGLE_CLIENT_ID: string;
   readonly GOOGLE_CLIENT_SECRET: string;
   readonly GOOGLE_REDIRECT_URI: string;
+  // The task list (title or id) the single-task MCP tools use when `list` is omitted.
+  readonly DEFAULT_TASK_LIST: string;
   readonly GOOGLE_TOKEN_STORE: TokenStoreNamespace;
 };
 

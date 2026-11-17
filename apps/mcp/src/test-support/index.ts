@@ -5,6 +5,7 @@ const rpcBodySchema = z.object({
   id: z.number().optional(),
   result: z.object({
     serverInfo: z.object({ name: z.string() }).optional(),
+    instructions: z.string().optional(),
     tools: z.array(z.object({ name: z.string() })).optional(),
     isError: z.boolean().optional(),
     content: z.array(z.object({ type: z.string(), text: z.string() })).optional(),

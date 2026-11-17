@@ -2,8 +2,12 @@ import { InvalidInputError } from '@napolab/gct-core/errors';
 import { describe, expect, it } from 'vitest';
 
 import {
+  createTaskArgs,
   createTaskListArgs,
   deleteTaskListArgs,
+  setTaskStatusArgs,
+  taskRefArgs,
+  updateTaskArgs,
   renameTaskListArgs,
   toCreateTaskInput,
   clearCompletedTasksArgs,
@@ -107,9 +111,9 @@ describe('toListTasksQuery API filters', () => {
 describe('toMoveTaskRequest', () => {
   const move = (args: Omit<MoveTaskArgs, 'taskId'>) => toMoveTaskRequest({ taskId: 't1', ...args });
 
-  it('moves a task to the top of its own (default) list when nothing else is given', () => {
+  it('moves a task to the top of its own (configured default) list when nothing else is given', () => {
     expect(move({})._unsafeUnwrap()).toEqual({
-      list: { kind: 'default' },
+      list: { kind: 'configuredDefault' },
       destination: { kind: 'sameList' },
       input: { taskId: 't1', placement: { kind: 'root', position: { kind: 'first' } } },
     });
@@ -128,7 +132,9 @@ describe('toMoveTaskRequest', () => {
     expect(move({ list: 'Work', destinationList: 'Home' })._unsafeUnwrap().destination).toEqual({ kind: 'otherList', list: { kind: 'named', name: 'Home' } });
     expect(move({ list: 'Work', destinationList: '@default' })._unsafeUnwrap().destination).toEqual({ kind: 'otherList', list: { kind: 'default' } });
     expect(move({ list: 'Work', destinationList: 'Work' })._unsafeUnwrap().destination).toEqual({ kind: 'sameList' });
-    expect(move({ destinationList: '@default' })._unsafeUnwrap().destination).toEqual({ kind: 'sameList' });
+    expect(move({ list: '@default', destinationList: '@default' })._unsafeUnwrap().destination).toEqual({ kind: 'sameList' });
+    // An omitted source is the configured default list, which may or may not be '@default': resolved by id later.
+    expect(move({ destinationList: '@default' })._unsafeUnwrap().destination).toEqual({ kind: 'otherList', list: { kind: 'default' } });
   });
 
   it.each<[Omit<MoveTaskArgs, 'taskId'>, string]>([
@@ -141,7 +147,7 @@ describe('toMoveTaskRequest', () => {
   });
 
   it('rejects unknown keys', () => {
-    expect(moveTaskArgs.safeParse({ taskId: 't1', destination: 'Work' }).success).toBe(false);
+    expect(moveTaskArgs('日常タスク').safeParse({ taskId: 't1', destination: 'Work' }).success).toBe(false);
   });
 });
 
@@ -164,16 +170,28 @@ describe('toClearTaskListTarget', () => {
 });
 
 describe('toTaskRef', () => {
-  it('targets the default list unless one is named', () => {
-    expect(toTaskRef({ taskId: 't1' })).toEqual({ list: { kind: 'default' }, input: { taskId: 't1' } });
+  it("targets the configured default list unless one is named, and Google's default list for '@default'", () => {
+    expect(toTaskRef({ taskId: 't1' })).toEqual({ list: { kind: 'configuredDefault' }, input: { taskId: 't1' } });
     expect(toTaskRef({ taskId: 't1', list: 'Work' })).toEqual({ list: { kind: 'named', name: 'Work' }, input: { taskId: 't1' } });
+    expect(toTaskRef({ taskId: 't1', list: '@default' })).toEqual({ list: { kind: 'default' }, input: { taskId: 't1' } });
+  });
+});
+
+describe('optional list argument', () => {
+  it('names the configured default list in its description', () => {
+    for (const schema of [taskRefArgs('日常タスク'), setTaskStatusArgs('日常タスク'), createTaskArgs('日常タスク'), updateTaskArgs('日常タスク'), moveTaskArgs('日常タスク')]) {
+      const description = schema.shape.list.description ?? '';
+      expect(description).toContain('"日常タスク"');
+      expect(description).toContain("'@default'");
+      expect(description).not.toContain("the user's default list");
+    }
   });
 });
 
 describe('toCreateTaskInput', () => {
-  it('creates a root task first in the default list by default', () => {
+  it('creates a root task first in the configured default list by default', () => {
     expect(toCreateTaskInput({ title: 'Buy milk' })._unsafeUnwrap()).toEqual({
-      list: { kind: 'default' },
+      list: { kind: 'configuredDefault' },
       input: { title: 'Buy milk', notes: '', due: { kind: 'none' }, placement: { kind: 'root', position: { kind: 'first' } } },
     });
   });
@@ -196,7 +214,7 @@ describe('toCreateTaskInput', () => {
 describe('toUpdateTaskInput', () => {
   it('keeps what is not mentioned', () => {
     expect(toUpdateTaskInput({ taskId: 't1', title: 'New' })._unsafeUnwrap()).toEqual({
-      list: { kind: 'default' },
+      list: { kind: 'configuredDefault' },
       input: { taskId: 't1', title: { kind: 'set', value: 'New' }, notes: { kind: 'keep' }, due: { kind: 'keep' } },
     });
   });

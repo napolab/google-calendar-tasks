@@ -91,7 +91,7 @@ const tasks: ITasksService = {
   deleteTaskList: unexpected,
 };
 
-const deps: ToolDeps = { services: { calendar, tasks }, now: () => 0, connectURL: 'https://gct.example.com/google/connect' };
+const deps: ToolDeps = { services: { calendar, tasks }, now: () => 0, connectURL: 'https://gct.example.com/google/connect', defaultTaskList: '日常タスク' };
 
 const rpc = async (method: string, params: unknown): Promise<unknown> => {
   const server = new McpServer({ name: 'test', version: '0' }, { jsonSchemaValidator: new CfWorkerJsonSchemaValidator() });

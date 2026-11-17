@@ -9,6 +9,10 @@ const ACCESS_TEAM = 'napochaan';
 // (it appears in every authorization URL); the client secret is a Worker secret (`cf workers secrets update`).
 const GOOGLE_CLIENT_ID = '888995174857-d9edsvvhd038midk2j7gme5f1o8npunh.apps.googleusercontent.com';
 
+// The Google Tasks list (a title or an id; '@default' = Google's own default list) the MCP task tools use when the
+// caller omits `list`. Also named in the server instructions.
+const DEFAULT_TASK_LIST = '日常タスク';
+
 type ModeSettings = {
   readonly name: string;
   readonly access: { readonly teamDomain: string; readonly aud: string };
@@ -33,6 +37,7 @@ const workerFor = (settings: ModeSettings) => ({
     CF_ACCESS_AUD: bindings.text(settings.access.aud),
     GOOGLE_CLIENT_ID: bindings.text(GOOGLE_CLIENT_ID),
     GOOGLE_REDIRECT_URI: bindings.text(settings.redirectURI),
+    DEFAULT_TASK_LIST: bindings.text(DEFAULT_TASK_LIST),
     GOOGLE_CLIENT_SECRET: bindings.secret(),
   },
 });

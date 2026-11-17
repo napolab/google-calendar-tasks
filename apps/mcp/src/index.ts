@@ -25,6 +25,7 @@ const bindingsFor = (env: Env, ctx: ExecutionContext): AppBindings => ({
   GOOGLE_CLIENT_ID: env.GOOGLE_CLIENT_ID,
   GOOGLE_CLIENT_SECRET: env.GOOGLE_CLIENT_SECRET,
   GOOGLE_REDIRECT_URI: env.GOOGLE_REDIRECT_URI,
+  DEFAULT_TASK_LIST: env.DEFAULT_TASK_LIST,
   GOOGLE_TOKEN_STORE: ctx.exports.GoogleTokenStore,
 });
 

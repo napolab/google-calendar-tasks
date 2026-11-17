@@ -67,6 +67,7 @@ export const depsWith = (calendar: Partial<ICalendarService>): ToolDeps => ({
   services: { calendar: { ...unusedCalendar, ...calendar }, tasks: unusedTasks },
   now: () => NOW,
   connectURL: CONNECT_URL,
+  defaultTaskList: '日常タスク',
 });
 
 export const jsonOf = (result: ToolResult): unknown => {

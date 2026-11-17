@@ -23,5 +23,7 @@ Some values must stay literal for tooling (e.g. dynamic `import('@shikijs/langs/
 | Side A | Side B (test) |
 | ------ | ------------- |
 | `VALID_IDS_FROM` (`apps/mcp/src/mcp/tool-result/error-messages`) — the `list_*` tools a 404 hint names | `MCP_TOOL_NAMES` (`apps/mcp/src/mcp/server`), asserted in `error-messages.test.ts` |
+| `buildServerInstructions` (`apps/mcp/src/mcp/server-instructions`) — every snake_case tool name in the server instructions, and the "sendUpdates unset = no email" claim | `MCP_TOOL_NAMES` (`apps/mcp/src/mcp/server`) and `toSendUpdates` (`apps/mcp/src/mcp/calendar/shared`), asserted in `server-instructions.test.ts` |
+| `DefaultTaskListNotFoundError` (`apps/mcp/src/errors`) — the tools its message names | `MCP_TOOL_NAMES` (`apps/mcp/src/mcp/server`), asserted in `error-messages.test.ts` |
 
 Add new pairs to this table when you introduce one. When the two sides live in different workspaces, import the other side through its package subpath export.
