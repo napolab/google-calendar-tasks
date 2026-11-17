@@ -1,4 +1,6 @@
-import type { Task, TaskAssignment, TaskAssignmentSource, TaskDue, TaskHierarchy, TaskLink, TaskListSummary, TaskPage, TaskPageCursor } from '@napolab/gct-core/tasks';
+import { orderTasksHierarchically } from '@napolab/gct-core/tasks';
+
+import type { OrderedTask, Task, TaskAssignment, TaskAssignmentSource, TaskDue, TaskHierarchy, TaskLink, TaskListSummary, TaskPage, TaskPageCursor } from '@napolab/gct-core/tasks';
 
 // Read side: tasks shaped for an LLM (ids always present, dates as YYYY-MM-DD, absent values as null; output only).
 
@@ -22,7 +24,17 @@ export type TaskView = {
 
 export type TaskListView = { readonly id: string; readonly title: string; readonly updated: string };
 
-export type TaskPageView = { readonly taskListId: string; readonly tasks: readonly TaskView[]; readonly nextPageToken: string | null };
+// A task in a listing: `depth` is how many of its ancestors are in the same page (0 = top level, also for a subtask
+// whose parent is on another page or filtered out — its parentId still names the parent).
+export type ListedTaskView = TaskView & { readonly depth: number };
+
+// One list's page in list_tasks — the same shape whether one list or every list was read.
+export type TaskListPageView = {
+  readonly taskListId: string;
+  readonly title: string;
+  readonly tasks: readonly ListedTaskView[];
+  readonly nextPageToken: string | null;
+};
 
 const dueOf = (due: TaskDue): string | null => {
   switch (due.kind) {
@@ -108,4 +120,12 @@ const nextPageTokenOf = (next: TaskPageCursor): string | null => {
   }
 };
 
-export const toTaskPageView = (taskListId: string, page: TaskPage): TaskPageView => ({ taskListId, tasks: page.items.map(toTaskView), nextPageToken: nextPageTokenOf(page.next) });
+const toListedTaskView = ({ task, depth }: OrderedTask): ListedTaskView => ({ ...toTaskView(task), depth });
+
+// Tasks in outline order: each parent followed by its subtasks (core orderTasksHierarchically).
+export const toTaskListPageView = (list: TaskListSummary, page: TaskPage): TaskListPageView => ({
+  taskListId: list.id,
+  title: list.title,
+  tasks: orderTasksHierarchically(page.items).map(toListedTaskView),
+  nextPageToken: nextPageTokenOf(page.next),
+});

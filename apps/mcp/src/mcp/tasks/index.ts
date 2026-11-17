@@ -24,7 +24,7 @@ import {
   toUpdateTaskInput,
   updateTaskArgs,
 } from './input';
-import { toTaskListView, toTaskPageView, toTaskView } from './view';
+import { toTaskListPageView, toTaskListView, toTaskView } from './view';
 
 import type { ToolDeps } from '../tool-deps';
 import type { ToolError, ToolResult } from '../tool-result';
@@ -46,9 +46,9 @@ import type {
   Targeted,
   UpdateTaskArgs,
 } from './input';
-import type { TaskPageView } from './view';
+import type { TaskListPageView } from './view';
 import type { McpServer } from '@modelcontextprotocol/server';
-import type { ITasksService, MoveTaskInput, TaskListLookup, TaskListSummary, TaskMoveDestination } from '@napolab/gct-core/tasks';
+import type { ITasksService, MoveTaskInput, TaskListLookup, TaskListSummary, TaskMoveDestination, TaskPageRequest } from '@napolab/gct-core/tasks';
 import type { Result } from 'neverthrow';
 
 // Google Tasks tools. Each handler: arguments → core input (./input) → `list` title / id → list id
@@ -188,26 +188,27 @@ const settleMove = (request: MoveTaskRequest, lists: readonly TaskListSummary[],
 const resolveMove = (tasks: ITasksService, request: MoveTaskRequest): ResultAsync<MoveTaskInput, ToolError> =>
   lookupMove(tasks, request).andThen((lookups) => listsFor(tasks, needsTitles(lookups)).andThen((lists) => settleMove(request, lists, lookups)));
 
-type ListGroup = TaskPageView & { readonly title: string };
+// list_tasks always answers `{ lists }`: one entry per list read (exactly one when `list` is given).
+type TasksListing = { readonly lists: readonly TaskListPageView[] };
 
-// One list's page, or every list grouped.
-type TasksListing = TaskPageView | { readonly lists: readonly ListGroup[] };
-
-const listGroup =
-  (tasks: ITasksService, options: ListTasksOptions) =>
-  (list: TaskListSummary): ResultAsync<ListGroup, ToolError> =>
-    tasks.listTasks({ ...options, taskListId: list.id, page: { kind: 'first' } }).map((page) => ({ ...toTaskPageView(list.id, page), title: list.title }));
+const listPage =
+  (tasks: ITasksService, options: ListTasksOptions, page: TaskPageRequest) =>
+  (list: TaskListSummary): ResultAsync<TaskListPageView, ToolError> =>
+    tasks.listTasks({ ...options, taskListId: list.id, page }).map((taskPage) => toTaskListPageView(list, taskPage));
 
 // Every list is read concurrently; the first failing list fails the call (a partial listing would hide tasks).
+// One list is resolved to its summary for the title: a name costs no extra call, '@default' one tasklists.get.
 const listTasksFor = (tasks: ITasksService, query: ListTasksQuery): ResultAsync<TasksListing, ToolError> => {
   switch (query.kind) {
     case 'all':
       return tasks
         .listTaskLists()
-        .andThen((lists) => ResultAsync.combine(lists.map(listGroup(tasks, query.options))))
+        .andThen((lists) => ResultAsync.combine(lists.map(listPage(tasks, query.options, { kind: 'first' }))))
         .map((lists): TasksListing => ({ lists }));
     case 'one':
-      return resolveListTarget(tasks, query.list).andThen((taskListId) => tasks.listTasks({ ...query.options, taskListId, page: query.page }).map((page) => toTaskPageView(taskListId, page)));
+      return resolveListSummary(tasks, query.list)
+        .andThen(listPage(tasks, query.options, query.page))
+        .map((list): TasksListing => ({ lists: [list] }));
     default: {
       const _exhaustive: never = query;
       throw new Error(`unhandled list query: ${JSON.stringify(_exhaustive)}`);
@@ -320,7 +321,7 @@ export const registerTasksTools = (server: McpServer, deps: ToolDeps): void => {
     {
       title: 'List tasks',
       description:
-        "List tasks. Without list: EVERY list, grouped ({ lists: [{ taskListId, title, tasks, nextPageToken }] }). With list (id, title or '@default'): that list only. Completed tasks are included by default; deleted and assigned (Docs / Chat) tasks only with showDeleted / showAssigned. dueFrom / dueTo are inclusive YYYY-MM-DD days. updatedMin / completedMin / completedMax take RFC 3339 with an offset or YYYY-MM-DD (a day in Asia/Tokyo). updatedMin / completedMin are inclusive (a task at exactly that instant is listed); a completedMax day reaches the end of that day.",
+        "List tasks. Always returns { lists: [{ taskListId, title, tasks, nextPageToken }] }: without list, one entry per task list (EVERY list); with list (id, title or '@default'), exactly one entry for that list (its real id, even for '@default'). Within a page, tasks are in outline order: each top-level task (by position) is followed by its subtasks; each task carries parentId and depth (0 = top level, 1 = subtask of the task above). A subtask whose parent is on another page or filtered out comes after the top-level tasks with depth 0 and a non-null parentId. Completed tasks are included by default; deleted and assigned (Docs / Chat) tasks only with showDeleted / showAssigned. dueFrom / dueTo are inclusive YYYY-MM-DD days. updatedMin / completedMin / completedMax take RFC 3339 with an offset or YYYY-MM-DD (a day in Asia/Tokyo). updatedMin / completedMin are inclusive (a task at exactly that instant is listed); a completedMax day reaches the end of that day.",
       inputSchema: listTasksArgs,
       annotations: { readOnlyHint: true },
     },

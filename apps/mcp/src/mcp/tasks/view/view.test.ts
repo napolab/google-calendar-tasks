@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { toTaskListView, toTaskPageView, toTaskView } from './index';
+import { toTaskListPageView, toTaskListView, toTaskView } from './index';
 
 import type { Task } from '@napolab/gct-core/tasks';
 
@@ -63,13 +63,33 @@ describe('toTaskView', () => {
   });
 });
 
-describe('toTaskListView / toTaskPageView', () => {
+describe('toTaskListView', () => {
   it('keeps the list id and title', () => {
     expect(toTaskListView({ id: 'l1', title: 'Work', updated: 'u' })).toEqual({ id: 'l1', title: 'Work', updated: 'u' });
   });
+});
 
-  it('carries the next page token or null', () => {
-    expect(toTaskPageView('l1', { items: [open], next: { kind: 'more', pageToken: 'p2' } })).toMatchObject({ taskListId: 'l1', nextPageToken: 'p2', tasks: [{ id: 't1' }] });
-    expect(toTaskPageView('l1', { items: [], next: { kind: 'last' } }).nextPageToken).toBeNull();
+describe('toTaskListPageView', () => {
+  const work = { id: 'l1', title: 'Work', updated: 'u' };
+
+  it('names the list and carries the next page token or null', () => {
+    const view = toTaskListPageView(work, { items: [open], next: { kind: 'more', pageToken: 'p2' } });
+    expect(Object.keys(view)).toEqual(['taskListId', 'title', 'tasks', 'nextPageToken']);
+    expect(view).toMatchObject({ taskListId: 'l1', title: 'Work', nextPageToken: 'p2', tasks: [{ id: 't1' }] });
+    expect(toTaskListPageView(work, { items: [], next: { kind: 'last' } }).nextPageToken).toBeNull();
+  });
+
+  it('lists each parent before its subtasks, with their depth and parentId', () => {
+    const parent: Task = { ...open, id: 'p1', hierarchy: { kind: 'root' }, position: '0002' };
+    const child: Task = { ...open, id: 'c1', hierarchy: { kind: 'subtask', parentId: 'p1' }, position: '0000' };
+    const orphan: Task = { ...open, id: 'o1', hierarchy: { kind: 'subtask', parentId: 'gone' }, position: '0000' };
+
+    const view = toTaskListPageView(work, { items: [child, orphan, parent], next: { kind: 'last' } });
+
+    expect(view.tasks.map((task) => [task.id, task.parentId, task.depth])).toEqual([
+      ['p1', null, 0],
+      ['c1', 'p1', 1],
+      ['o1', 'gone', 0],
+    ]);
   });
 });

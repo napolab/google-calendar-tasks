@@ -135,6 +135,7 @@ describe('tasks tools', () => {
 
     const body = jsonOf(await handlers.listTasks({}));
 
+    expect(Object.keys(body as object)).toEqual(['lists']);
     expect(body).toMatchObject({
       lists: [
         { taskListId: 'l-default', title: 'My Tasks', tasks: [{ id: 't1', taskListId: 'l-default' }], nextPageToken: null },
@@ -170,7 +171,10 @@ describe('tasks tools', () => {
   it('list_tasks resolves a list title (case-insensitive) to its id, listing the lists only after the GET by id fails', async () => {
     const { handlers, calls, lookups } = handlersWith({});
 
-    expect(jsonOf(await handlers.listTasks({ list: 'work' }))).toMatchObject({ taskListId: 'l-work', nextPageToken: null });
+    const body = jsonOf(await handlers.listTasks({ list: 'work' }));
+
+    expect(Object.keys(body as object)).toEqual(['lists']);
+    expect(body).toMatchObject({ lists: [{ taskListId: 'l-work', title: 'Work', tasks: [{ id: 't1', taskListId: 'l-work' }], nextPageToken: null }] });
     expect(calls[0]?.input).toMatchObject({ taskListId: 'l-work' });
     expect(lookups).toEqual(['getTaskList work', 'listTaskLists']);
   });
@@ -178,9 +182,36 @@ describe('tasks tools', () => {
   it('list_tasks reads a list id with exactly one lookup (GET by id, no listing)', async () => {
     const { handlers, calls, lookups } = handlersWith({});
 
-    expect(jsonOf(await handlers.listTasks({ list: 'l-work' }))).toMatchObject({ taskListId: 'l-work' });
+    expect(jsonOf(await handlers.listTasks({ list: 'l-work' }))).toMatchObject({ lists: [{ taskListId: 'l-work', title: 'Work' }] });
     expect(calls[0]?.input).toMatchObject({ taskListId: 'l-work' });
     expect(lookups).toEqual(['getTaskList l-work']);
+  });
+
+  it("list_tasks reads '@default' with one GET for its real id and title, keeping the page token", async () => {
+    const { handlers, calls, lookups } = handlersWith({ listTaskLists: unexpected });
+
+    const body = jsonOf(await handlers.listTasks({ list: '@default', pageToken: 'p2' }));
+
+    expect(Object.keys(body as object)).toEqual(['lists']);
+    expect(body).toMatchObject({ lists: [{ taskListId: 'l-default', title: 'My Tasks', tasks: [{ id: 't1' }], nextPageToken: null }] });
+    expect(calls[0]?.input).toMatchObject({ taskListId: 'l-default', page: { kind: 'token', pageToken: 'p2' } });
+    expect(lookups).toEqual(['getTaskList @default']);
+  });
+
+  it('list_tasks lists each parent before its subtasks, in every list', async () => {
+    const child: Task = { ...task('l-work', 'child'), hierarchy: { kind: 'subtask', parentId: 'parent' }, position: '00000000000000000000' };
+    const parent: Task = { ...task('l-work', 'parent'), position: '00000000000000000001' };
+    const { handlers } = handlersWith({ listTasks: () => okAsync({ items: [child, parent], next: { kind: 'last' } }) });
+
+    for (const args of [{}, { list: 'l-work' }]) {
+      const body = jsonOf(await handlers.listTasks(args)) as { lists: { tasks: { id: string; parentId: string | null; depth: number }[] }[] };
+      for (const list of body.lists) {
+        expect(list.tasks.map((listed) => [listed.id, listed.parentId, listed.depth])).toEqual([
+          ['parent', null, 0],
+          ['child', 'parent', 1],
+        ]);
+      }
+    }
   });
 
   it('propagates a lookup failure other than an invalid id without listing', async () => {
