@@ -4,9 +4,9 @@ import { describe, expect, it } from 'vitest';
 import { AmbiguousTaskListError, GoogleNotFoundError, GooglePermissionError, GoogleResponseParseError, InvalidInputError, TaskListNotFoundError } from '../errors';
 import { createGoogleClient } from '../google-client';
 
-import { createTasksService, findTaskList, resolveTaskList } from './index';
+import { createTasksService, findTaskList, orderTasksHierarchically, resolveTaskList } from './index';
 
-import type { ListTasksInput, TaskListSummary, UpdateTaskInput } from './index';
+import type { ListTasksInput, Task, TaskListSummary, UpdateTaskInput } from './index';
 
 type Captured = { url: string; init: RequestInit | undefined };
 
@@ -677,6 +677,96 @@ describe('listTasks API filters', () => {
     expect(error.message).toContain("'exclude'");
     expect(error.message).toContain("'include'");
     expect(calls).toHaveLength(0);
+  });
+});
+
+describe('orderTasksHierarchically', () => {
+  const at = (id: string, parentId: string | undefined, position: string, updated = '2026-11-17T00:00:00.000Z'): Task => ({
+    status: 'needsAction',
+    id,
+    taskListId: 'L1',
+    title: id,
+    notes: '',
+    due: { kind: 'none' },
+    hierarchy: parentId === undefined ? { kind: 'root' } : { kind: 'subtask', parentId },
+    position,
+    updated,
+    webViewLink: '',
+    links: [],
+    assignment: { kind: 'none' },
+    deleted: false,
+    hidden: false,
+  });
+
+  const shape = (tasks: readonly Task[]): readonly (readonly [string, number])[] => orderTasksHierarchically(tasks).map(({ task, depth }) => [task.id, depth] as const);
+
+  it('puts each parent before its subtasks, even when a subtask sorts first by position', () => {
+    // As Google returned them in the report: child → sub → parent, all at position 0.
+    const tasks = [at('child', 'parent', '00000000000000000000'), at('sub', 'parent', '00000000000000000001'), at('parent', undefined, '00000000000000000002')];
+    expect(shape(tasks)).toEqual([
+      ['parent', 0],
+      ['child', 1],
+      ['sub', 1],
+    ]);
+  });
+
+  it('sorts top-level tasks and each sibling group by position', () => {
+    const tasks = [at('b', undefined, '2'), at('b2', 'b', '2'), at('a', undefined, '1'), at('b1', 'b', '1'), at('a1', 'a', '1')];
+    expect(shape(tasks)).toEqual([
+      ['a', 0],
+      ['a1', 1],
+      ['b', 0],
+      ['b1', 1],
+      ['b2', 1],
+    ]);
+  });
+
+  it('nests deeper levels recursively', () => {
+    const tasks = [at('grandchild', 'child', '0'), at('child', 'root', '0'), at('root', undefined, '0')];
+    expect(shape(tasks)).toEqual([
+      ['root', 0],
+      ['child', 1],
+      ['grandchild', 2],
+    ]);
+  });
+
+  it('breaks a position tie by the most recently updated first, then by id', () => {
+    const tasks = [at('old', undefined, '0', '2026-11-17T00:00:00.000Z'), at('z-new', undefined, '0', '2026-11-17T09:00:00.000Z'), at('y-new', undefined, '0', '2026-11-17T09:00:00.000Z')];
+    expect(shape(tasks)).toEqual([
+      ['y-new', 0],
+      ['z-new', 0],
+      ['old', 0],
+    ]);
+  });
+
+  it('keeps subtasks whose parent is not in the page after the top-level tasks, with their own subtasks', () => {
+    const tasks = [at('orphan-b', 'gone', '2'), at('orphan-a', 'gone', '1'), at('kid', 'orphan-b', '0'), at('top', undefined, '9')];
+    expect(shape(tasks)).toEqual([
+      ['top', 0],
+      ['orphan-a', 0],
+      ['orphan-b', 0],
+      ['kid', 1],
+    ]);
+  });
+
+  it('never drops a task, even when parents form a cycle', () => {
+    const tasks = [at('x', 'y', '0'), at('y', 'x', '1'), at('top', undefined, '0')];
+    expect(shape(tasks)).toEqual([
+      ['top', 0],
+      ['x', 0],
+      ['y', 0],
+    ]);
+  });
+
+  it('keeps each task unchanged (hierarchy included) and does not reorder the input', () => {
+    const tasks = [at('child', 'parent', '0'), at('parent', undefined, '1')];
+    const ordered = orderTasksHierarchically(tasks);
+    expect(ordered.map(({ task }) => task)).toStrictEqual([tasks[1], tasks[0]]);
+    expect(tasks.map((task) => task.id)).toEqual(['child', 'parent']);
+  });
+
+  it('returns nothing for an empty page', () => {
+    expect(orderTasksHierarchically([])).toEqual([]);
   });
 });
 

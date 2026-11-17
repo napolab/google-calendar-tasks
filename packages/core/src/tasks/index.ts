@@ -1100,6 +1100,68 @@ export const findTaskList = (tasks: ITasksService, query: string): ResultAsync<T
     }
   });
 
+// ---------------------------------------------------------------------------------------------
+// orderTasksHierarchically: a page of tasks in outline order (each parent followed by its subtasks)
+// ---------------------------------------------------------------------------------------------
+
+// A task in outline order. `depth` counts its ancestors present in the same page: 0 = top level (also a subtask
+// whose parent is not in the page), 1 = a subtask of the task above it, and so on.
+export type OrderedTask = { readonly task: Task; readonly depth: number };
+
+const parentIDOf = (hierarchy: TaskHierarchy): string | undefined => {
+  switch (hierarchy.kind) {
+    case 'root':
+      return undefined;
+    case 'subtask':
+      return hierarchy.parentId;
+    default: {
+      const _exhaustive: never = hierarchy;
+      throw new Error(`unhandled hierarchy: ${JSON.stringify(_exhaustive)}`);
+    }
+  }
+};
+
+// Code-unit order (not locale order): positions are zero-padded digits, ids are opaque.
+const compareText = (a: string, b: string): number => {
+  if (a < b) return -1;
+  if (a > b) return 1;
+  return 0;
+};
+
+// Siblings by position. New tasks all get the same position (0…0), so ties go to the most recently updated
+// (Google's `updated` is always UTC with milliseconds, so it compares as text), then to the id — a stable order.
+const compareSiblings = (a: Task, b: Task): number => {
+  const byPosition = compareText(a.position, b.position);
+  if (byPosition !== 0) return byPosition;
+  const byUpdated = compareText(b.updated, a.updated);
+  if (byUpdated !== 0) return byUpdated;
+  return compareText(a.id, b.id);
+};
+
+// Google returns a page ordered by position alone, which can put a subtask before its parent. This orders it like the
+// Google Tasks app: top-level tasks by position, each followed by its subtasks (recursively). Subtasks whose parent is
+// not in the page (another page, or filtered out) follow the top-level tasks, ordered the same way. No task is dropped:
+// anything unreachable from those (only a malformed parent cycle) comes last at depth 0.
+export const orderTasksHierarchically = (tasks: readonly Task[]): readonly OrderedTask[] => {
+  const ids = new Set(tasks.map((task) => task.id));
+  const isTopLevel = (task: Task): boolean => parentIDOf(task.hierarchy) === undefined;
+  const isOrphan = (task: Task): boolean => {
+    const parentID = parentIDOf(task.hierarchy);
+    return parentID !== undefined && !ids.has(parentID);
+  };
+  const childrenOf = (id: string): readonly Task[] => tasks.filter((task) => parentIDOf(task.hierarchy) === id).toSorted(compareSiblings);
+  const outline = (task: Task, depth: number): readonly OrderedTask[] => [{ task, depth }, ...childrenOf(task.id).flatMap((child) => outline(child, depth + 1))];
+
+  const starts = [...tasks.filter(isTopLevel).toSorted(compareSiblings), ...tasks.filter(isOrphan).toSorted(compareSiblings)];
+  const placed = starts.flatMap((task) => outline(task, 0));
+  const placedIDs = new Set(placed.map(({ task }) => task.id));
+  const unreachable = tasks
+    .filter((task) => !placedIDs.has(task.id))
+    .toSorted(compareSiblings)
+    .map((task): OrderedTask => ({ task, depth: 0 }));
+  return [...placed, ...unreachable];
+};
+
 export const createTasksService = (deps: TasksServiceDeps): ITasksService => ({
   listTaskLists: () => fetchTaskListPages(deps.client, undefined, []),
   getTaskList: getTaskList(deps.client),
