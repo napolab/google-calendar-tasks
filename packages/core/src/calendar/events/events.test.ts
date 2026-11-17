@@ -67,6 +67,7 @@ describe('event fields on read', () => {
       guests: { canModify: false, canInviteOthers: true, canSeeOtherGuests: true },
       conference: { kind: 'none' },
       hangoutLink: '',
+      iCalUID: '',
     });
   });
 
@@ -512,6 +513,28 @@ describe('moveEvent', () => {
     expect(event.calendarId).toBe('team@example.com');
   });
 
+  // Google's move response is the source copy, marked cancelled; the event lives on, confirmed, in the destination.
+  it('re-reads the moved event from the destination calendar instead of returning the cancelled source copy', async () => {
+    const { service, calls } = serviceWith(
+      () => json({ id: 'evt1', status: 'cancelled' }),
+      () => json({ ...wireEvent, status: 'confirmed', summary: 'Plan' }),
+    );
+
+    const event = (await service.moveEvent({ calendarId: 'a@example.com', eventId: 'evt1', destination: 'team@example.com', sendUpdates: 'none' }))._unsafeUnwrap();
+
+    expect(calls).toHaveLength(2);
+    expect(calls[1]?.method).toBe('GET');
+    expect(calls[1]?.url.pathname).toBe('/calendar/v3/calendars/team%40example.com/events/evt1');
+    expect(event).toMatchObject({
+      status: 'confirmed',
+      id: 'evt1',
+      calendarId: 'team@example.com',
+      summary: 'Plan',
+      start: { kind: 'dateTime', dateTime: '2026-11-17T10:00:00+09:00' },
+      end: { kind: 'dateTime', dateTime: '2026-11-17T11:00:00+09:00' },
+    });
+  });
+
   it.each([
     ['an empty destination', { eventId: 'evt1', destination: '', sendUpdates: 'none' as const }, ['destination', 'list_calendars']],
     ['the same calendar', { calendarId: 'a@example.com', eventId: 'evt1', destination: 'a@example.com', sendUpdates: 'none' as const }, ['destination', '"a@example.com"', 'already']],
@@ -584,6 +607,12 @@ describe('importEvent', () => {
       guestsCanSeeOtherGuests: true,
     });
     expect(event.calendarId).toBe('primary');
+  });
+
+  it('returns the iCalUID Google stored for the imported event', async () => {
+    const { service } = serviceWith(() => json({ ...wireEvent, iCalUID: 'abc123@example.com' }));
+
+    expect((await service.importEvent(baseImport))._unsafeUnwrap()).toMatchObject({ iCalUID: 'abc123@example.com' });
   });
 
   it.each([

@@ -38,6 +38,7 @@ const readDefaults = {
   guests: { canModify: false, canInviteOthers: true, canSeeOtherGuests: true },
   conference: { kind: 'none' },
   hangoutLink: '',
+  iCalUID: '',
 } as const;
 
 // The richer create fields at the values the old tests implicitly used, and the bodies they produce.

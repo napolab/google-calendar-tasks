@@ -1,8 +1,8 @@
-import { Result, err, ok, okAsync } from 'neverthrow';
+import { Result, err, errAsync, ok, okAsync } from 'neverthrow';
 import { z } from 'zod';
 
 import { dayjs } from '../dayjs';
-import { AmbiguousTaskListError, InvalidInputError, TaskListNotFoundError } from '../errors';
+import { AmbiguousTaskListError, GoogleAPIError, GoogleNotFoundError, InvalidInputError, TaskListNotFoundError } from '../errors';
 
 import type { GoogleError } from '../errors';
 import type { GoogleClient, QueryValue } from '../google-client';
@@ -1053,6 +1053,52 @@ export const resolveTaskList = (lists: readonly TaskListSummary[], query: string
     }
   }
 };
+
+// ---------------------------------------------------------------------------------------------
+// findTaskList: a list named by id or title, read with one GET when the name is an id
+// ---------------------------------------------------------------------------------------------
+
+// What a GET by id says about a name: it is a list id, or it is not one (then it may be a title).
+export type TaskListLookup = { readonly kind: 'found'; readonly list: TaskListSummary } | { readonly kind: 'notAnID'; readonly query: string };
+
+// tasklists.get answers 400 "Invalid task list ID" for a name that is not a list id (observed for both a title and an
+// unknown id-shaped string); 404 is accepted too, as Google documents it for missing resources.
+const isNotAnID = (error: GoogleError): boolean => error instanceof GoogleNotFoundError || (error instanceof GoogleAPIError && error.status === 400);
+
+export const lookupTaskListByID = (tasks: ITasksService, query: string): ResultAsync<TaskListLookup, GoogleError> =>
+  tasks
+    .getTaskList({ taskListId: query })
+    .map((list): TaskListLookup => ({ kind: 'found', list }))
+    .orElse((error): ResultAsync<TaskListLookup, GoogleError> => (isNotAnID(error) ? okAsync({ kind: 'notAnID', query }) : errAsync(error)));
+
+// A lookup that was not an id is matched against every list (by title, with the usual not-found / ambiguous errors).
+export const settleTaskListLookup = (lists: readonly TaskListSummary[], lookup: TaskListLookup): Result<TaskListSummary, TaskListNotFoundError | AmbiguousTaskListError> => {
+  switch (lookup.kind) {
+    case 'found':
+      return ok(lookup.list);
+    case 'notAnID':
+      return resolveTaskList(lists, lookup.query);
+    default: {
+      const _exhaustive: never = lookup;
+      throw new Error(`unhandled task list lookup: ${JSON.stringify(_exhaustive)}`);
+    }
+  }
+};
+
+// An id costs one GET; only a name that is not an id lists every list (tasklists.list) to match it as a title.
+export const findTaskList = (tasks: ITasksService, query: string): ResultAsync<TaskListSummary, GoogleError | TaskListNotFoundError | AmbiguousTaskListError> =>
+  lookupTaskListByID(tasks, query).andThen((lookup) => {
+    switch (lookup.kind) {
+      case 'found':
+        return okAsync(lookup.list);
+      case 'notAnID':
+        return tasks.listTaskLists().andThen((lists) => settleTaskListLookup(lists, lookup));
+      default: {
+        const _exhaustive: never = lookup;
+        throw new Error(`unhandled task list lookup: ${JSON.stringify(_exhaustive)}`);
+      }
+    }
+  });
 
 export const createTasksService = (deps: TasksServiceDeps): ITasksService => ({
   listTaskLists: () => fetchTaskListPages(deps.client, undefined, []),

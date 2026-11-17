@@ -1,10 +1,10 @@
 import { okAsync } from 'neverthrow';
 import { describe, expect, it } from 'vitest';
 
-import { AmbiguousTaskListError, GoogleNotFoundError, GoogleResponseParseError, InvalidInputError, TaskListNotFoundError } from '../errors';
+import { AmbiguousTaskListError, GoogleNotFoundError, GooglePermissionError, GoogleResponseParseError, InvalidInputError, TaskListNotFoundError } from '../errors';
 import { createGoogleClient } from '../google-client';
 
-import { createTasksService, resolveTaskList } from './index';
+import { createTasksService, findTaskList, resolveTaskList } from './index';
 
 import type { ListTasksInput, TaskListSummary, UpdateTaskInput } from './index';
 
@@ -726,6 +726,51 @@ describe('resolveTaskList', () => {
     expect(error.message).toContain('"Work" (id L1)');
     expect(error.message).toContain('"work " (id L2)');
     expect(error.message).not.toContain('L3');
+  });
+});
+
+describe('findTaskList', () => {
+  const wireList = (id: string, title: string) => ({ kind: 'tasks#taskList', id, title, updated: '2026-11-17T00:00:00.000Z' });
+  const ALL = { kind: 'tasks#taskLists', items: [wireList('MDE', 'マイタスク'), wireList('MDI', '日常タスク')] };
+
+  // GET lists/{id} knows only real ids; anything else answers `missing` (404 or 400, as Google does for a malformed id).
+  const google = (missing: Response) =>
+    serviceWith((url) => {
+      if (url === `${BASE}/users/@me/lists`) return json(ALL);
+      if (url === `${BASE}/users/@me/lists/MDI`) return json(wireList('MDI', '日常タスク'));
+      return missing.clone();
+    });
+
+  it('reads an id with a single GET by id, without listing every list', async () => {
+    const { service, calls } = google(json({ error: { code: 404, message: 'Not Found' } }, 404));
+
+    expect((await findTaskList(service, 'MDI'))._unsafeUnwrap()).toStrictEqual({ id: 'MDI', title: '日常タスク', updated: '2026-11-17T00:00:00.000Z' });
+    expect(calls.map((call) => call.url)).toStrictEqual([`${BASE}/users/@me/lists/MDI`]);
+  });
+
+  it.each([
+    ['404', json({ error: { code: 404, message: 'Not Found' } }, 404)],
+    ['400 (invalid id)', json({ error: { code: 400, message: 'Invalid task list ID' } }, 400)],
+  ])('falls back to matching the title in every list when the GET by id answers %s', async (_label, missing) => {
+    const { service, calls } = google(missing);
+
+    expect((await findTaskList(service, '日常タスク'))._unsafeUnwrap().id).toBe('MDI');
+    expect(calls.map((call) => call.url)).toStrictEqual([`${BASE}/users/@me/lists/${encodeURIComponent('日常タスク')}`, `${BASE}/users/@me/lists`]);
+  });
+
+  it('keeps the not-found error that names the available titles', async () => {
+    const { service } = google(json({ error: { code: 404, message: 'Not Found' } }, 404));
+
+    const error = (await findTaskList(service, 'nope'))._unsafeUnwrapErr();
+    expect(error).toBeInstanceOf(TaskListNotFoundError);
+    expect(error.message).toContain('"マイタスク", "日常タスク"');
+  });
+
+  it('propagates any other failure of the GET by id without listing', async () => {
+    const { service, calls } = google(json({ error: { code: 403, message: 'Forbidden' } }, 403));
+
+    expect((await findTaskList(service, 'MDX'))._unsafeUnwrapErr()).toBeInstanceOf(GooglePermissionError);
+    expect(calls).toHaveLength(1);
   });
 });
 

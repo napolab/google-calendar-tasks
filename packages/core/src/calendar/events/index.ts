@@ -449,6 +449,7 @@ export const updateEvent = (client: GoogleClient, input: UpdateEventInput): Resu
 export const deleteEvent = (client: GoogleClient, input: DeleteEventInput): ResultAsync<void, GoogleError> =>
   client.request({ method: 'DELETE', url: eventURL(calendarIdOf(input), input.eventId), query: sendUpdatesQuery(input.sendUpdates), schema: emptySchema }).map(() => undefined);
 
+// events.move answers with the source copy, which is `cancelled`; the moved event is read back from the destination.
 export const moveEvent = (client: GoogleClient, input: MoveEventInput): ResultAsync<CalendarEvent, GoogleError | InvalidInputError> =>
   validateMove(input)
     .asyncAndThen(() =>
@@ -459,7 +460,7 @@ export const moveEvent = (client: GoogleClient, input: MoveEventInput): ResultAs
         schema: eventSchema,
       }),
     )
-    .map(withCalendarId(input.destination));
+    .andThen((moved) => getEvent(client, { calendarId: input.destination, eventId: moved.id }));
 
 export const quickAddEvent = (client: GoogleClient, input: QuickAddEventInput): ResultAsync<CalendarEvent, GoogleError | InvalidInputError> => {
   const calendarId = calendarIdOf(input);

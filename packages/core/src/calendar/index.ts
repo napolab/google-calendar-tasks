@@ -150,6 +150,8 @@ export type ActiveEvent = {
   readonly conference: Conference;
   // The Meet link ('' when the event has none).
   readonly hangoutLink: string;
+  // The iCalendar UID (RFC 5545), shared by every copy of the event across calendars ('' when Google sends none).
+  readonly iCalUID: string;
   readonly created: string;
   readonly updated: string;
 };

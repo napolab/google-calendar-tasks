@@ -171,6 +171,7 @@ const activeEventSchema = recurrenceWireSchema
     guestsCanSeeOtherGuests: z.boolean().nullish(),
     conferenceData: conferenceDataSchema.nullish(),
     hangoutLink: z.string().nullish(),
+    iCalUID: z.string().nullish(),
     created: z.string().nullish(),
     updated: z.string().nullish(),
   })
@@ -200,6 +201,7 @@ const activeEventSchema = recurrenceWireSchema
       guests: { canModify: event.guestsCanModify === true, canInviteOthers: event.guestsCanInviteOthers !== false, canSeeOtherGuests: event.guestsCanSeeOtherGuests !== false },
       conference: toConference(event.conferenceData),
       hangoutLink: event.hangoutLink ?? '',
+      iCalUID: event.iCalUID ?? '',
       created: event.created ?? '',
       updated: event.updated ?? '',
     };
