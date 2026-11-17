@@ -1,0 +1,12 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "plugins": ["typescript", "unicorn", "oxc", "import"],
+  "categories": {},
+  "rules": {
+    "func-style": ["error", "expression"],
+    "prefer-arrow-callback": "error",
+    "unicorn/filename-case": ["error", { "cases": { "kebabCase": true } }]
+  },
+  "env": { "builtin": true },
+  "ignorePatterns": ["dist", "**/*.test.ts", "**/*.test-d.ts"]
+}
