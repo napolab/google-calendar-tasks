@@ -60,6 +60,10 @@ const normalizedTask = {
   position: '00000000000000000001',
   updated: '2026-11-17T01:02:03.000Z',
   webViewLink: 'https://tasks.google.com/task/T1',
+  links: [],
+  assignment: { kind: 'none' },
+  deleted: false,
+  hidden: false,
 };
 
 const neverCalled = () => serviceWith(() => json(wireTask));
@@ -155,6 +159,10 @@ describe('getTask', () => {
       position: '00000000000000000001',
       updated: '2026-11-17T01:02:03.000Z',
       webViewLink: 'https://tasks.google.com/task/T1',
+      links: [],
+      assignment: { kind: 'none' },
+      deleted: false,
+      hidden: false,
     });
   });
 
@@ -196,6 +204,69 @@ describe('getTask', () => {
     const result = await service.getTask({ taskId: 'missing' });
 
     expect(result._unsafeUnwrapErr()).toBeInstanceOf(GoogleNotFoundError);
+  });
+});
+
+describe('task read-only output fields', () => {
+  it('normalizes links, deleted and hidden', async () => {
+    const { service } = serviceWith(() =>
+      json({
+        ...wireTask,
+        deleted: true,
+        hidden: true,
+        links: [
+          { type: 'email', description: 'Re: invoice', link: 'https://mail.google.com/mail/#all/abc' },
+          { type: 'generic', link: 'https://example.com' },
+        ],
+      }),
+    );
+
+    const task = (await service.getTask({ taskId: 'T1' }))._unsafeUnwrap();
+
+    expect(task.deleted).toBe(true);
+    expect(task.hidden).toBe(true);
+    expect(task.links).toStrictEqual([
+      { type: 'email', description: 'Re: invoice', link: 'https://mail.google.com/mail/#all/abc' },
+      { type: 'generic', description: '', link: 'https://example.com' },
+    ]);
+  });
+
+  it.each([
+    [
+      'a Docs assignment',
+      { linkToTask: 'https://docs.google.com/d/1', surfaceType: 'DOCUMENT', driveResourceInfo: { driveFileId: 'F1', resourceKey: 'K1' } },
+      { kind: 'assigned', linkToTask: 'https://docs.google.com/d/1', source: { kind: 'document', driveFileId: 'F1', resourceKey: 'K1' } },
+    ],
+    [
+      'a Docs assignment without a resource key',
+      { linkToTask: 'https://docs.google.com/d/1', surfaceType: 'DOCUMENT', driveResourceInfo: { driveFileId: 'F1' } },
+      { kind: 'assigned', linkToTask: 'https://docs.google.com/d/1', source: { kind: 'document', driveFileId: 'F1', resourceKey: '' } },
+    ],
+    [
+      'a Chat space assignment',
+      { linkToTask: 'https://chat.google.com/x', surfaceType: 'SPACE', spaceInfo: { space: 'spaces/AAA' } },
+      { kind: 'assigned', linkToTask: 'https://chat.google.com/x', source: { kind: 'space', space: 'spaces/AAA' } },
+    ],
+    [
+      'an assignment from a surface without details',
+      { linkToTask: 'https://mail.google.com/x', surfaceType: 'GMAIL' },
+      { kind: 'assigned', linkToTask: 'https://mail.google.com/x', source: { kind: 'other', surfaceType: 'GMAIL' } },
+    ],
+    ['an unknown, empty assignment', {}, { kind: 'assigned', linkToTask: '', source: { kind: 'other', surfaceType: 'CONTEXT_TYPE_UNSPECIFIED' } }],
+  ] as const)('normalizes %s', async (_label, assignmentInfo, expected) => {
+    const { service } = serviceWith(() => json({ ...wireTask, assignmentInfo }));
+
+    const task = (await service.getTask({ taskId: 'T1' }))._unsafeUnwrap();
+
+    expect(task.assignment).toStrictEqual(expected);
+  });
+
+  it('tolerates null links / flags / assignment and a deleted task without position or webViewLink', async () => {
+    const { service } = serviceWith(() => json({ ...wireTask, links: null, deleted: null, hidden: null, assignmentInfo: null, position: undefined, webViewLink: undefined }));
+
+    const task = (await service.getTask({ taskId: 'T1' }))._unsafeUnwrap();
+
+    expect(task).toMatchObject({ links: [], deleted: false, hidden: false, assignment: { kind: 'none' }, position: '', webViewLink: '' });
   });
 });
 
@@ -391,6 +462,10 @@ describe('updateTask', () => {
 const listAll = {
   due: { kind: 'any' },
   completed: 'include',
+  completedAt: { kind: 'any' },
+  updated: { kind: 'any' },
+  deleted: 'exclude',
+  assigned: 'exclude',
   page: { kind: 'first' },
   maxResults: 100,
 } satisfies Omit<ListTasksInput, 'taskListId'>;
@@ -507,6 +582,100 @@ describe('listTasks', () => {
     expect(error).toBeInstanceOf(InvalidInputError);
     expect(error.message).toContain(`${maxResults}`);
     expect(error.message).toContain('1 and 100');
+    expect(calls).toHaveLength(0);
+  });
+});
+
+describe('listTasks API filters', () => {
+  it('sends no updatedMin / completed bounds and showDeleted=false / showAssigned=false by default', async () => {
+    const { service, calls } = serviceWith(() => json({ items: [] }));
+
+    await service.listTasks(listAll);
+
+    const url = urlOf(calls[0]);
+    expect(url.searchParams.has('updatedMin')).toBe(false);
+    expect(url.searchParams.has('completedMin')).toBe(false);
+    expect(url.searchParams.has('completedMax')).toBe(false);
+    expect(url.searchParams.get('showDeleted')).toBe('false');
+    expect(url.searchParams.get('showAssigned')).toBe('false');
+  });
+
+  it('sends updatedMin as the given RFC 3339 instant', async () => {
+    const { service, calls } = serviceWith(() => json({ items: [] }));
+
+    await service.listTasks({ ...listAll, updated: { kind: 'since', updatedMin: '2026-11-17T00:00:00+09:00' } });
+
+    expect(urlOf(calls[0]).searchParams.get('updatedMin')).toBe('2026-11-17T00:00:00+09:00');
+  });
+
+  it.each([
+    ['from', { kind: 'from', completedMin: '2026-11-01T00:00:00+09:00' }, '2026-11-01T00:00:00+09:00', null],
+    ['until', { kind: 'until', completedMax: '2026-12-01T00:00:00Z' }, null, '2026-12-01T00:00:00Z'],
+    ['between', { kind: 'between', completedMin: '2026-11-01T00:00:00Z', completedMax: '2026-12-01T00:00:00Z' }, '2026-11-01T00:00:00Z', '2026-12-01T00:00:00Z'],
+  ] as const)('sends a %s completedAt filter as completedMin / completedMax', async (_label, completedAt, completedMin, completedMax) => {
+    const { service, calls } = serviceWith(() => json({ items: [] }));
+
+    const result = await service.listTasks({ ...listAll, completedAt });
+
+    expect(result.isOk()).toBe(true);
+    const url = urlOf(calls[0]);
+    expect(url.searchParams.get('completedMin')).toBe(completedMin);
+    expect(url.searchParams.get('completedMax')).toBe(completedMax);
+  });
+
+  it.each([
+    ['include', 'exclude', 'true', 'false'],
+    ['exclude', 'include', 'false', 'true'],
+  ] as const)('maps deleted=%s / assigned=%s to showDeleted=%s / showAssigned=%s', async (deleted, assigned, showDeleted, showAssigned) => {
+    const { service, calls } = serviceWith(() => json({ items: [] }));
+
+    await service.listTasks({ ...listAll, deleted, assigned });
+
+    const url = urlOf(calls[0]);
+    expect(url.searchParams.get('showDeleted')).toBe(showDeleted);
+    expect(url.searchParams.get('showAssigned')).toBe(showAssigned);
+  });
+
+  it.each([
+    ['updatedMin', { updated: { kind: 'since', updatedMin: '2026-11-17' } }, '2026-11-17'],
+    ['updatedMin', { updated: { kind: 'since', updatedMin: '2026-11-17T10:00:00' } }, '2026-11-17T10:00:00'],
+    ['completedMin', { completedAt: { kind: 'from', completedMin: '2026-11-17 10:00' } }, '2026-11-17 10:00'],
+    ['completedMax', { completedAt: { kind: 'until', completedMax: '2026-02-30T00:00:00Z' } }, '2026-02-30T00:00:00Z'],
+    ['completedMax', { completedAt: { kind: 'between', completedMin: '2026-11-01T00:00:00Z', completedMax: 'tomorrow' } }, 'tomorrow'],
+  ] as const)('rejects a malformed %s without calling Google', async (field, filter, value) => {
+    const { service, calls } = neverCalled();
+
+    const result = await service.listTasks({ ...listAll, ...filter });
+
+    const error = result._unsafeUnwrapErr();
+    expect(error).toBeInstanceOf(InvalidInputError);
+    expect(error.message).toContain(field);
+    expect(error.message).toContain(`"${value}"`);
+    expect(error.message).toContain('RFC 3339');
+    expect(calls).toHaveLength(0);
+  });
+
+  it('rejects completedMin after completedMax without calling Google', async () => {
+    const { service, calls } = neverCalled();
+
+    const result = await service.listTasks({ ...listAll, completedAt: { kind: 'between', completedMin: '2026-12-01T00:00:00+09:00', completedMax: '2026-11-01T00:00:00+09:00' } });
+
+    const error = result._unsafeUnwrapErr();
+    expect(error).toBeInstanceOf(InvalidInputError);
+    expect(error.message).toContain('2026-12-01T00:00:00+09:00');
+    expect(error.message).toContain('2026-11-01T00:00:00+09:00');
+    expect(calls).toHaveLength(0);
+  });
+
+  it('rejects a completedAt filter while completed tasks are excluded, without calling Google', async () => {
+    const { service, calls } = neverCalled();
+
+    const result = await service.listTasks({ ...listAll, completed: 'exclude', completedAt: { kind: 'from', completedMin: '2026-11-01T00:00:00Z' } });
+
+    const error = result._unsafeUnwrapErr();
+    expect(error).toBeInstanceOf(InvalidInputError);
+    expect(error.message).toContain("'exclude'");
+    expect(error.message).toContain("'include'");
     expect(calls).toHaveLength(0);
   });
 });
@@ -719,6 +888,130 @@ describe('deleteTaskList', () => {
     const { service } = serviceWith(() => json({ error: { code: 404, message: 'gone' } }, 404));
 
     const result = await service.deleteTaskList({ taskListId: 'nope' });
+
+    expect(result._unsafeUnwrapErr()).toBeInstanceOf(GoogleNotFoundError);
+  });
+});
+
+const top = { kind: 'root', position: { kind: 'first' } } as const;
+
+describe('moveTask', () => {
+  it('POSTs tasks/{id}/move with no body and no query to move a task to the top of its own list', async () => {
+    const { service, calls } = serviceWith(() => json(wireTask));
+
+    const result = await service.moveTask({ taskId: 'T1', destination: { kind: 'sameList' }, placement: top });
+
+    expect(calls[0]?.init?.method).toBe('POST');
+    expect(calls[0]?.url).toBe(`${BASE}/lists/%40default/tasks/T1/move`);
+    expect(calls[0]?.init?.body).toBeUndefined();
+    expect(result._unsafeUnwrap()).toStrictEqual(normalizedTask);
+  });
+
+  it.each([
+    ['after a sibling at the top level', { kind: 'root', position: { kind: 'after', previousId: 'S0' } }, { parent: null, previous: 'S0' }],
+    ['as the first subtask of a parent', { kind: 'subtask', parentId: 'P1', position: { kind: 'first' } }, { parent: 'P1', previous: null }],
+    ['as a subtask after a sibling', { kind: 'subtask', parentId: 'P1', position: { kind: 'after', previousId: 'S0' } }, { parent: 'P1', previous: 'S0' }],
+  ] as const)('places the task %s via parent / previous', async (_label, placement, expected) => {
+    const { service, calls } = serviceWith(() => json(wireTask));
+
+    await service.moveTask({ taskListId: 'L1', taskId: 'T1', destination: { kind: 'sameList' }, placement });
+
+    const url = urlOf(calls[0]);
+    expect(url.pathname).toBe('/tasks/v1/lists/L1/tasks/T1/move');
+    expect(url.searchParams.get('parent')).toBe(expected.parent);
+    expect(url.searchParams.get('previous')).toBe(expected.previous);
+    expect(url.searchParams.has('destinationTasklist')).toBe(false);
+  });
+
+  it('moves the task to another list with destinationTasklist and reports the destination list', async () => {
+    const { service, calls } = serviceWith(() => json({ ...wireTask, id: 'T1' }));
+
+    const result = await service.moveTask({
+      taskListId: 'L1',
+      taskId: 'T1',
+      destination: { kind: 'otherList', taskListId: 'L2' },
+      placement: { kind: 'subtask', parentId: 'P9', position: { kind: 'first' } },
+    });
+
+    const url = urlOf(calls[0]);
+    expect(url.pathname).toBe('/tasks/v1/lists/L1/tasks/T1/move');
+    expect(url.searchParams.get('destinationTasklist')).toBe('L2');
+    expect(url.searchParams.get('parent')).toBe('P9');
+    expect(result._unsafeUnwrap()).toMatchObject({ id: 'T1', taskListId: 'L2' });
+  });
+
+  it.each([
+    ['parentId', { kind: 'subtask', parentId: 'T1', position: { kind: 'first' } }],
+    ['previousId', { kind: 'root', position: { kind: 'after', previousId: 'T1' } }],
+    ['previousId', { kind: 'subtask', parentId: 'P1', position: { kind: 'after', previousId: 'T1' } }],
+  ] as const)('rejects the task itself as %s without calling Google', async (field, placement) => {
+    const { service, calls } = neverCalled();
+
+    const result = await service.moveTask({ taskId: 'T1', destination: { kind: 'sameList' }, placement });
+
+    const error = result._unsafeUnwrapErr();
+    expect(error).toBeInstanceOf(InvalidInputError);
+    expect(error.message).toContain(field);
+    expect(error.message).toContain('"T1"');
+    expect(calls).toHaveLength(0);
+  });
+
+  it.each(['', '  '])('rejects the blank destination list %j without calling Google', async (taskListId) => {
+    const { service, calls } = neverCalled();
+
+    const result = await service.moveTask({ taskId: 'T1', destination: { kind: 'otherList', taskListId }, placement: top });
+
+    const error = result._unsafeUnwrapErr();
+    expect(error).toBeInstanceOf(InvalidInputError);
+    expect(error.message).toContain('destination');
+    expect(calls).toHaveLength(0);
+  });
+
+  it('propagates GoogleNotFoundError', async () => {
+    const { service } = serviceWith(() => json({ error: { code: 404, message: 'gone' } }, 404));
+
+    const result = await service.moveTask({ taskId: 'T1', destination: { kind: 'sameList' }, placement: top });
+
+    expect(result._unsafeUnwrapErr()).toBeInstanceOf(GoogleNotFoundError);
+  });
+});
+
+describe('clearCompletedTasks', () => {
+  it('POSTs lists/{id}/clear with no body and resolves to undefined on 204', async () => {
+    const { service, calls } = serviceWith(() => new Response(null, { status: 204 }));
+
+    const result = await service.clearCompletedTasks({ taskListId: 'a/b' });
+
+    expect(calls[0]?.init?.method).toBe('POST');
+    expect(calls[0]?.url).toBe(`${BASE}/lists/a%2Fb/clear`);
+    expect(calls[0]?.init?.body).toBeUndefined();
+    expect(result._unsafeUnwrap()).toBeUndefined();
+  });
+
+  it('accepts @default and an empty 200 answer', async () => {
+    const { service, calls } = serviceWith(() => new Response('', { status: 200 }));
+
+    const result = await service.clearCompletedTasks({ taskListId: '@default' });
+
+    expect(calls[0]?.url).toBe(`${BASE}/lists/%40default/clear`);
+    expect(result.isOk()).toBe(true);
+  });
+
+  it.each(['', ' \t'])('rejects the blank list %j without calling Google', async (taskListId) => {
+    const { service, calls } = neverCalledList();
+
+    const result = await service.clearCompletedTasks({ taskListId });
+
+    const error = result._unsafeUnwrapErr();
+    expect(error).toBeInstanceOf(InvalidInputError);
+    expect(error.message).toContain(`"${taskListId}"`);
+    expect(calls).toHaveLength(0);
+  });
+
+  it('propagates GoogleNotFoundError', async () => {
+    const { service } = serviceWith(() => json({ error: { code: 404, message: 'gone' } }, 404));
+
+    const result = await service.clearCompletedTasks({ taskListId: 'nope' });
 
     expect(result._unsafeUnwrapErr()).toBeInstanceOf(GoogleNotFoundError);
   });
