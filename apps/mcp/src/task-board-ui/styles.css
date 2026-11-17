@@ -179,7 +179,8 @@ button:disabled {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: var(--gb-space-2);
-  align-items: start;
+  /* Columns stretch to the tallest one so the whole column (not just its cards) is a drop target. */
+  align-items: stretch;
 }
 
 /* The iframe is as wide as the host's container, so the viewport width is the container width. */
@@ -238,6 +239,7 @@ button:disabled {
 
 .cards {
   display: flex;
+  flex: 1;
   flex-direction: column;
   gap: var(--gb-space-2);
   margin: 0;
