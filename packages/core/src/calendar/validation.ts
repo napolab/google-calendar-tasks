@@ -4,7 +4,7 @@ import { z } from 'zod';
 import { dayjs } from '../dayjs';
 import { InvalidInputError } from '../errors';
 
-import type { EventSearch, EventTime, FieldPatch, FreeBusyInput, TimePatch, TimeWindow, TimeZoneRef, UpdateEventInput } from './index';
+import type { EventSearch, EventTime, FieldPatch, FreeBusyInput, SetPatch, TimeWindow, TimeZoneRef } from './index';
 
 // Write-side validators (.claude/rules/mcp-write-strict.md): reject instead of coercing, and say
 // what was wrong, the expected format, and how to fix it — all before any request is sent.
@@ -51,7 +51,7 @@ export const validateDateTime = (field: string, value: string): Result<string, I
   return err(new InvalidInputError(`${field} "${value}" is not ${DATE_TIME_FORMAT}. Add the offset explicitly (Asia/Tokyo is +09:00) and retry.`));
 };
 
-const validateTimeZoneRef = (field: string, zone: TimeZoneRef): Result<TimeZoneRef, InvalidInputError> => {
+export const validateTimeZoneRef = (field: string, zone: TimeZoneRef): Result<TimeZoneRef, InvalidInputError> => {
   switch (zone.kind) {
     case 'none':
       return ok(zone);
@@ -65,9 +65,14 @@ const validateTimeZoneRef = (field: string, zone: TimeZoneRef): Result<TimeZoneR
   }
 };
 
-export const validateMaxResults = (maxResults: number): Result<number, InvalidInputError> => {
-  if (maxResults % 1 === 0 && maxResults >= 1 && maxResults <= MAX_RESULTS_LIMIT) return ok(maxResults);
-  return err(new InvalidInputError(`maxResults ${maxResults} is out of range: expected an integer from 1 to ${MAX_RESULTS_LIMIT}. Pass a smaller page size and follow nextPage for more results.`));
+export const validateTimeZoneName = (field: string, name: string): Result<string, InvalidInputError> => {
+  if (isTimeZone(name)) return ok(name);
+  return err(new InvalidInputError(`${field} "${name}" is not an IANA time zone name, e.g. "Asia/Tokyo" or "UTC". Pass a valid IANA zone.`));
+};
+
+export const validateMaxResults = (maxResults: number, limit: number = MAX_RESULTS_LIMIT): Result<number, InvalidInputError> => {
+  if (maxResults % 1 === 0 && maxResults >= 1 && maxResults <= limit) return ok(maxResults);
+  return err(new InvalidInputError(`maxResults ${maxResults} is out of range: expected an integer from 1 to ${limit}. Pass a smaller page size and follow nextPage for more results.`));
 };
 
 export const validateSearch = (search: EventSearch): Result<EventSearch, InvalidInputError> => {
@@ -194,57 +199,27 @@ export const validateEventRange = <R extends EventRange>(range: R): Result<R, In
     .andThen(() => validateOrder(range.start, range.end))
     .map(() => range);
 
-// ---- update patches ----
+// ---- shared write helpers ----
 
-const ambiguousEmptyError = (field: string): InvalidInputError =>
-  new InvalidInputError(
-    `${field} is set to an empty value. Use { kind: 'clear' } to remove the ${field}, { kind: 'set', value } with a non-empty value to change it, or { kind: 'keep' } to leave it untouched.`,
-  );
+export const validateNonEmpty = (field: string, value: string, hint: string): Result<string, InvalidInputError> =>
+  value.trim() === '' ? err(new InvalidInputError(`${field} is empty. ${hint}`)) : ok(value);
 
-// `set` with an empty value would duplicate `clear`; only one spelling is accepted.
-const validatePatch = <T extends string | readonly string[]>(field: string, patch: FieldPatch<T>): Result<FieldPatch<T>, InvalidInputError> => {
-  switch (patch.kind) {
-    case 'keep':
-    case 'clear':
-      return ok(patch);
-    case 'set':
-      return patch.value.length > 0 ? ok(patch) : err(ambiguousEmptyError(field));
-    default: {
-      const _exhaustive: never = patch;
-      throw new Error(`unhandled patch: ${JSON.stringify(_exhaustive)}`);
-    }
-  }
-};
-
-const validateTimePatch = (patch: TimePatch): Result<TimePatch, InvalidInputError> => {
-  switch (patch.kind) {
-    case 'keep':
-      return ok(patch);
-    case 'set':
-      return validateEventRange(patch);
-    default: {
-      const _exhaustive: never = patch;
-      throw new Error(`unhandled time patch: ${JSON.stringify(_exhaustive)}`);
-    }
-  }
-};
-
-const changesSomething = (input: UpdateEventInput): boolean => [input.summary.kind, input.description.kind, input.location.kind, input.attendees.kind, input.time.kind].some((kind) => kind !== 'keep');
-
-const validateHasChange = (input: UpdateEventInput): Result<UpdateEventInput, InvalidInputError> => {
-  if (changesSomething(input)) return ok(input);
+// A set text must be non-empty: an empty value would duplicate `clear` (or silently erase a required field).
+export const validateTextPatch = (field: string, patch: FieldPatch<string>): Result<void, InvalidInputError> => {
+  if (patch.kind !== 'set' || patch.value.trim() !== '') return ok(undefined);
   return err(
     new InvalidInputError(
-      `updateEvent has no field to change: every field is { kind: 'keep' }. Set at least one of summary, description, location, attendees, time to { kind: 'set', ... } (or { kind: 'clear' }).`,
+      `${field} is set to an empty value. Use { kind: 'clear' } to remove the ${field}, { kind: 'set', value } with a non-empty value to change it, or { kind: 'keep' } to leave it untouched.`,
     ),
   );
 };
 
-export const validateEventUpdate = (input: UpdateEventInput): Result<UpdateEventInput, InvalidInputError> =>
-  validateHasChange(input)
-    .andThen(() => validatePatch('summary', input.summary))
-    .andThen(() => validatePatch('description', input.description))
-    .andThen(() => validatePatch('location', input.location))
-    .andThen(() => validatePatch('attendees', input.attendees))
-    .andThen(() => validateTimePatch(input.time))
-    .map(() => input);
+// Runs `validate` on a set value; keep / clear pass through.
+export const validateSet = <T>(patch: FieldPatch<T> | SetPatch<T>, validate: (value: T) => Result<unknown, InvalidInputError>): Result<void, InvalidInputError> =>
+  patch.kind === 'set' ? validate(patch.value).map(() => undefined) : ok(undefined);
+
+// Every field is `keep`: the request would change nothing, so it is rejected with the fields that can change.
+export const validateHasChange = (operation: string, patches: readonly { readonly kind: string }[], fields: readonly string[]): Result<void, InvalidInputError> => {
+  if (patches.some((patch) => patch.kind !== 'keep')) return ok(undefined);
+  return err(new InvalidInputError(`${operation} has no field to change: every field is { kind: 'keep' }. Set at least one of ${fields.join(', ')} to { kind: 'set', ... } (or { kind: 'clear' }).`));
+};

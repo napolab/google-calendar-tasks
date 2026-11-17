@@ -1,21 +1,17 @@
-import { okAsync } from 'neverthrow';
-import { z } from 'zod';
-
-import { calendarListPageSchema, eventListPageSchema, eventSchema, freeBusySchema } from './schemas';
-import { validateEventRange, validateEventUpdate, validateFreeBusy, validateMaxResults, validateSearch, validateTimeWindow } from './validation';
-
-import type { GoogleEvent } from './schemas';
+import { createEvent, deleteEvent, getEvent, importEvent, listEventInstances, listEvents, moveEvent, quickAddEvent, updateEvent } from './events';
+import { deleteCalendarAclRule, getCalendarAclRule, insertCalendarAclRule, listCalendarAcl, updateCalendarAclRule } from './acl';
+import { getCalendarListEntry, listCalendars, subscribeCalendar, unsubscribeCalendar, updateCalendarListEntry } from './calendar-list';
+import { clearPrimaryCalendar, createCalendar, deleteCalendar, getCalendar, updateCalendar } from './calendars';
+import { getColors } from './colors';
+import { queryFreeBusy } from './freebusy';
+import { getSetting, listSettings } from './settings';
 
 import type { GoogleError, InvalidInputError } from '../errors';
 import type { GoogleClient } from '../google-client';
 import type { ResultAsync } from 'neverthrow';
 
-const BASE_URL = 'https://www.googleapis.com/calendar/v3';
-
-const PRIMARY_CALENDAR = 'primary';
-
-// Every state is its own variant (.claude/rules/discriminated-unions.md). The only optional field
-// is the input-edge `calendarId` (see EventRef).
+// Google Calendar v3 service. Every state is its own variant (.claude/rules/discriminated-unions.md). The only
+// optional field is the input-edge `calendarId` (see EventRef).
 
 // ---- shared ----
 
@@ -27,15 +23,30 @@ export type TimeZoneRef = { readonly kind: 'none' } | { readonly kind: 'iana'; r
 // - `date`: an all-day event, `YYYY-MM-DD`. Google treats the END date as EXCLUSIVE: a one-day
 //   event on 2026-11-17 has start 2026-11-17 and end 2026-11-18.
 // - `dateTime`: RFC 3339 with an explicit offset (`2026-11-17T10:00:00+09:00` / `...Z`).
-//   `timeZone` is the IANA zone the event is anchored to (matters for recurring events).
+//   `timeZone` is the IANA zone the event is anchored to (required by Google for recurring events).
 export type EventTime = { readonly kind: 'date'; readonly date: string } | { readonly kind: 'dateTime'; readonly dateTime: string; readonly timeZone: TimeZoneRef };
 
-// The page after this one: pass `{ kind: 'next', pageToken }` back as ListEventsInput.page.
+// The page after this one: pass `{ kind: 'next', pageToken }` back as the input's `page`.
 export type NextPage = { readonly kind: 'none' } | { readonly kind: 'next'; readonly pageToken: string };
 
-// ---- calendars ----
+export type PageRequest = { readonly kind: 'first' } | { readonly kind: 'next'; readonly pageToken: string };
 
-export type AccessRole = 'freeBusyReader' | 'reader' | 'writer' | 'owner';
+export type FieldPatch<T> = { readonly kind: 'keep' } | { readonly kind: 'set'; readonly value: T } | { readonly kind: 'clear' };
+
+// A field that can be changed but has no "empty" state to clear to.
+export type SetPatch<T> = { readonly kind: 'keep' } | { readonly kind: 'set'; readonly value: T };
+
+// Who Google emails about an event write. Always sent explicitly (Google's own default varies by method).
+export type SendUpdates = 'none' | 'externalOnly' | 'all';
+
+export type ReminderMethod = 'email' | 'popup';
+
+// minutes: 0..40320 (4 weeks) before the start.
+export type ReminderOverride = { readonly method: ReminderMethod; readonly minutes: number };
+
+// ---- calendars (calendarList summary) ----
+
+export type AccessRole = 'freeBusyReader' | 'reader' | 'writerWithoutPrivateAccess' | 'writer' | 'owner';
 
 export type CalendarColor = { readonly kind: 'none' } | { readonly kind: 'hex'; readonly hex: string };
 
@@ -53,7 +64,10 @@ export type CalendarSummary = {
 
 export type AttendeeResponseStatus = 'needsAction' | 'declined' | 'tentative' | 'accepted';
 
-export type Attendee = { readonly email: string; readonly responseStatus: AttendeeResponseStatus };
+export type Attendee = { readonly email: string; readonly responseStatus: AttendeeResponseStatus; readonly optional: boolean };
+
+// An attendee to invite. `optional: true` marks them as an optional guest.
+export type AttendeeInput = { readonly email: string; readonly optional: boolean };
 
 export type Recurrence =
   | { readonly kind: 'single' }
@@ -61,6 +75,58 @@ export type Recurrence =
   | { readonly kind: 'series'; readonly rules: readonly string[] }
   // One occurrence of a series; `originalStartTime` identifies its slot even if it was moved.
   | { readonly kind: 'instance'; readonly recurringEventId: string; readonly originalStartTime: EventTime };
+
+// The calendar's default reminders, or this event's own list (empty = no reminders at all).
+export type Reminders = { readonly kind: 'default' } | { readonly kind: 'custom'; readonly overrides: readonly ReminderOverride[] };
+
+// The calendar's color, or one of the event palette ids from colors.get ("1".."11").
+export type EventColor = { readonly kind: 'calendar' } | { readonly kind: 'color'; readonly colorId: string };
+
+export type Visibility = 'default' | 'public' | 'private' | 'confidential';
+
+// opaque = busy (blocks time), transparent = available.
+export type Transparency = 'opaque' | 'transparent';
+
+export type GuestPermissions = { readonly canModify: boolean; readonly canInviteOthers: boolean; readonly canSeeOtherGuests: boolean };
+
+export type AutoDeclineMode = 'declineNone' | 'declineAllConflictingInvitations' | 'declineOnlyNewConflictingInvitations';
+
+// '' declineMessage = none.
+export type FocusTimeProperties = { readonly autoDeclineMode: AutoDeclineMode; readonly declineMessage: string; readonly chatStatus: 'available' | 'doNotDisturb' };
+
+export type OutOfOfficeProperties = { readonly autoDeclineMode: AutoDeclineMode; readonly declineMessage: string };
+
+// '' = not set.
+export type OfficeLocation = { readonly label: string; readonly buildingId: string; readonly floorId: string; readonly floorSectionId: string; readonly deskId: string };
+
+export type WorkingLocation = { readonly type: 'homeOffice' } | { readonly type: 'officeLocation'; readonly office: OfficeLocation } | { readonly type: 'customLocation'; readonly label: string };
+
+// The "status" event types that carry their own properties. Primary calendar only.
+export type StatusEventType =
+  | { readonly kind: 'focusTime'; readonly properties: FocusTimeProperties }
+  | { readonly kind: 'outOfOffice'; readonly properties: OutOfOfficeProperties }
+  | { readonly kind: 'workingLocation'; readonly location: WorkingLocation };
+
+// What Google reports. `unknown` = a working location event Google sent without its properties.
+export type EventType =
+  | { readonly kind: 'default' }
+  | { readonly kind: 'birthday' }
+  | { readonly kind: 'fromGmail' }
+  | Exclude<StatusEventType, { readonly kind: 'workingLocation' }>
+  | { readonly kind: 'workingLocation'; readonly location: WorkingLocation | { readonly type: 'unknown' } };
+
+export type ConferenceEntryPoint = { readonly type: 'video' | 'phone' | 'sip' | 'more'; readonly uri: string; readonly label: string; readonly pin: string };
+
+export type Conference =
+  | { readonly kind: 'none' }
+  // `pending` while Google is still creating it (entry points arrive later); '' = not reported.
+  | {
+      readonly kind: 'conference';
+      readonly status: 'pending' | 'success' | 'failure';
+      readonly conferenceId: string;
+      readonly solution: string;
+      readonly entryPoints: readonly ConferenceEntryPoint[];
+    };
 
 export type ActiveEvent = {
   readonly status: 'confirmed' | 'tentative';
@@ -75,6 +141,15 @@ export type ActiveEvent = {
   readonly htmlLink: string;
   readonly attendees: readonly Attendee[];
   readonly recurrence: Recurrence;
+  readonly eventType: EventType;
+  readonly reminders: Reminders;
+  readonly color: EventColor;
+  readonly visibility: Visibility;
+  readonly transparency: Transparency;
+  readonly guests: GuestPermissions;
+  readonly conference: Conference;
+  // The Meet link ('' when the event has none).
+  readonly hangoutLink: string;
   readonly created: string;
   readonly updated: string;
 };
@@ -105,8 +180,6 @@ export type TimeWindow =
 // Free-text search over summary, description, location, attendees (Google's `q`).
 export type EventSearch = { readonly kind: 'none' } | { readonly kind: 'text'; readonly text: string };
 
-export type PageRequest = { readonly kind: 'first' } | { readonly kind: 'next'; readonly pageToken: string };
-
 export type ListEventsInput = {
   readonly calendarId?: string;
   readonly window: TimeWindow;
@@ -116,10 +189,20 @@ export type ListEventsInput = {
   readonly page: PageRequest;
 };
 
+// The occurrences of one recurring event (events.instances).
+export type ListEventInstancesInput = {
+  readonly calendarId?: string;
+  readonly eventId: string;
+  readonly window: TimeWindow;
+  // 1..2500.
+  readonly maxResults: number;
+  readonly page: PageRequest;
+};
+
 export type EventPage = { readonly events: readonly CalendarEvent[]; readonly nextPage: NextPage };
 
-export type CreateEventInput = {
-  readonly calendarId?: string;
+// The fields an event is made of, shared by create and import.
+export type EventDetails = {
   readonly summary: string;
   // '' / [] for none.
   readonly description: string;
@@ -127,14 +210,36 @@ export type CreateEventInput = {
   // start and end must be the same kind; end must be after start.
   readonly start: EventTime;
   readonly end: EventTime;
-  // Attendee email addresses.
-  readonly attendees: readonly string[];
+  readonly attendees: readonly AttendeeInput[];
+  // RRULE / EXRULE / RDATE / EXDATE lines; [] for a single event. A timed series needs start.timeZone.
+  readonly recurrence: readonly string[];
+  readonly reminders: Reminders;
+  readonly color: EventColor;
+  readonly visibility: Visibility;
+  readonly transparency: Transparency;
+  readonly guests: GuestPermissions;
 };
 
-export type FieldPatch<T> = { readonly kind: 'keep' } | { readonly kind: 'set'; readonly value: T } | { readonly kind: 'clear' };
+// `requestId` must be unique per request (Google ignores a reused one).
+export type ConferenceRequest = { readonly kind: 'none' } | { readonly kind: 'meet'; readonly requestId: string };
+
+// The type an event is created as (it cannot change afterwards).
+export type CreateEventType = { readonly kind: 'default' } | StatusEventType;
+
+export type CreateEventInput = EventDetails & {
+  readonly calendarId?: string;
+  readonly eventType: CreateEventType;
+  readonly conference: ConferenceRequest;
+  readonly sendUpdates: SendUpdates;
+};
+
+// events.import: a private copy of an existing event identified by its iCalendar UID.
+export type ImportEventInput = EventDetails & { readonly calendarId?: string; readonly iCalUID: string };
 
 // start and end move together so their kind and order can always be checked.
 export type TimePatch = { readonly kind: 'keep' } | { readonly kind: 'set'; readonly start: EventTime; readonly end: EventTime };
+
+export type ConferencePatch = { readonly kind: 'keep' } | { readonly kind: 'createMeet'; readonly requestId: string } | { readonly kind: 'remove' };
 
 export type UpdateEventInput = {
   readonly calendarId?: string;
@@ -142,9 +247,31 @@ export type UpdateEventInput = {
   readonly summary: FieldPatch<string>;
   readonly description: FieldPatch<string>;
   readonly location: FieldPatch<string>;
-  readonly attendees: FieldPatch<readonly string[]>;
+  readonly attendees: FieldPatch<readonly AttendeeInput[]>;
   readonly time: TimePatch;
+  // Replaces every rule. To end a series, set an RRULE with UNTIL / COUNT.
+  readonly recurrence: SetPatch<readonly string[]>;
+  readonly reminders: SetPatch<Reminders>;
+  // clear = back to the calendar's color.
+  readonly color: FieldPatch<string>;
+  readonly visibility: SetPatch<Visibility>;
+  readonly transparency: SetPatch<Transparency>;
+  readonly guestsCanModify: SetPatch<boolean>;
+  readonly guestsCanInviteOthers: SetPatch<boolean>;
+  readonly guestsCanSeeOtherGuests: SetPatch<boolean>;
+  readonly conference: ConferencePatch;
+  // The properties of a focusTime / outOfOffice / workingLocation event (its type itself cannot change).
+  readonly statusProperties: SetPatch<StatusEventType>;
+  readonly sendUpdates: SendUpdates;
 };
+
+export type DeleteEventInput = EventRef & { readonly sendUpdates: SendUpdates };
+
+// events.move: change the organizer calendar of an event (default events only).
+export type MoveEventInput = EventRef & { readonly destination: string; readonly sendUpdates: SendUpdates };
+
+// events.quickAdd: Google parses the text ("Lunch with Ann tomorrow 12pm").
+export type QuickAddEventInput = { readonly calendarId?: string; readonly text: string; readonly sendUpdates: SendUpdates };
 
 // ---- free / busy ----
 
@@ -165,253 +292,189 @@ export type CalendarAvailability =
 
 export type FreeBusyResult = { readonly timeMin: string; readonly timeMax: string; readonly calendars: readonly CalendarAvailability[] };
 
+// ---- calendars (calendar metadata) ----
+
+// Set only for secondary calendars.
+export type DataOwner = { readonly kind: 'none' } | { readonly kind: 'email'; readonly email: string };
+
+export type Calendar = {
+  readonly id: string;
+  readonly summary: string;
+  // '' when not set.
+  readonly description: string;
+  readonly location: string;
+  readonly timeZone: TimeZoneRef;
+  readonly dataOwner: DataOwner;
+};
+
+export type CalendarRef = { readonly calendarId?: string };
+
+// calendars.insert: a new secondary calendar owned by the user. '' / { kind: 'none' } = not set.
+export type CreateCalendarInput = { readonly summary: string; readonly description: string; readonly location: string; readonly timeZone: TimeZoneRef };
+
+export type UpdateCalendarInput = {
+  readonly calendarId?: string;
+  readonly summary: SetPatch<string>;
+  readonly description: FieldPatch<string>;
+  readonly location: FieldPatch<string>;
+  // An IANA zone name.
+  readonly timeZone: SetPatch<string>;
+};
+
+// Deleting has no 'primary' default: the id is always explicit (and 'primary' is rejected; Google cannot delete it).
+export type DeleteCalendarInput = { readonly calendarId: string };
+
+// ---- calendarList (the user's subscriptions and how they are displayed) ----
+
+export type CalendarNotificationType = 'eventCreation' | 'eventChange' | 'eventCancellation' | 'eventResponse' | 'agenda';
+
+export type CalendarListEntry = {
+  readonly id: string;
+  // The calendar's own title, and the user's name for it ('' when not overridden).
+  readonly summary: string;
+  readonly summaryOverride: string;
+  readonly description: string;
+  readonly location: string;
+  readonly timeZone: TimeZoneRef;
+  readonly accessRole: AccessRole;
+  readonly primary: boolean;
+  readonly hidden: boolean;
+  readonly selected: boolean;
+  // Calendar palette id from colors.get ('' when not set).
+  readonly colorId: string;
+  readonly backgroundColor: CalendarColor;
+  readonly foregroundColor: CalendarColor;
+  readonly defaultReminders: readonly ReminderOverride[];
+  // Email notifications the user gets for this calendar.
+  readonly notifications: readonly CalendarNotificationType[];
+};
+
+// The calendar palette (colors.get `calendar` ids), or explicit #RRGGBB colors.
+export type ListEntryColor = { readonly kind: 'palette'; readonly colorId: string } | { readonly kind: 'rgb'; readonly background: string; readonly foreground: string };
+
+// calendarList.insert: add an existing calendar (shared with the user, public, ...) to the list.
+export type SubscribeCalendarInput = { readonly calendarId: string; readonly color: { readonly kind: 'default' } | ListEntryColor };
+
+export type UpdateCalendarListEntryInput = {
+  readonly calendarId?: string;
+  readonly summaryOverride: FieldPatch<string>;
+  readonly color: SetPatch<ListEntryColor>;
+  readonly hidden: SetPatch<boolean>;
+  readonly selected: SetPatch<boolean>;
+  // [] = no default reminders.
+  readonly defaultReminders: SetPatch<readonly ReminderOverride[]>;
+  // [] = no email notifications.
+  readonly notifications: SetPatch<readonly CalendarNotificationType[]>;
+};
+
+// No 'primary' default: the primary calendar cannot be removed from the list.
+export type UnsubscribeCalendarInput = { readonly calendarId: string };
+
+// ---- acl (sharing) ----
+
+export type AclRole = 'none' | 'freeBusyReader' | 'reader' | 'writerWithoutPrivateAccess' | 'writer' | 'owner';
+
+// Who a rule applies to: everyone (public), one user, a group, or a whole domain.
+export type AclScope =
+  | { readonly type: 'default' }
+  | { readonly type: 'user'; readonly email: string }
+  | { readonly type: 'group'; readonly email: string }
+  | { readonly type: 'domain'; readonly domain: string };
+
+export type AclRule = { readonly id: string; readonly role: AclRole; readonly scope: AclScope };
+
+export type AclPage = { readonly rules: readonly AclRule[]; readonly nextPage: NextPage };
+
+export type ListCalendarAclInput = {
+  readonly calendarId?: string;
+  // 1..250.
+  readonly maxResults: number;
+  readonly page: PageRequest;
+};
+
+export type AclRuleRef = { readonly calendarId?: string; readonly ruleId: string };
+
+// `sendNotifications` is always explicit (Google's own default is to email the grantee).
+export type InsertAclRuleInput = { readonly calendarId?: string; readonly scope: AclScope; readonly role: AclRole; readonly sendNotifications: boolean };
+
+export type UpdateAclRuleInput = AclRuleRef & { readonly role: AclRole; readonly sendNotifications: boolean };
+
+// ---- colors / settings ----
+
+export type ColorDefinition = { readonly id: string; readonly background: string; readonly foreground: string };
+
+// `calendar` ids are for calendar list entries, `event` ids for events. Ordered by id.
+export type ColorPalettes = { readonly calendar: readonly ColorDefinition[]; readonly event: readonly ColorDefinition[] };
+
+// A user setting; the value format depends on the id (e.g. timezone → "Asia/Tokyo", weekStart → "0").
+export type Setting = { readonly id: string; readonly value: string };
+
+export type SettingRef = { readonly settingId: string };
+
+// ---- service ----
+
 export interface ICalendarService {
   listCalendars(): ResultAsync<readonly CalendarSummary[], GoogleError>;
   listEvents(input: ListEventsInput): ResultAsync<EventPage, GoogleError | InvalidInputError>;
+  listEventInstances(input: ListEventInstancesInput): ResultAsync<EventPage, GoogleError | InvalidInputError>;
   getEvent(input: EventRef): ResultAsync<CalendarEvent, GoogleError>;
   createEvent(input: CreateEventInput): ResultAsync<CalendarEvent, GoogleError | InvalidInputError>;
   updateEvent(input: UpdateEventInput): ResultAsync<CalendarEvent, GoogleError | InvalidInputError>;
-  deleteEvent(input: EventRef): ResultAsync<void, GoogleError>;
+  deleteEvent(input: DeleteEventInput): ResultAsync<void, GoogleError>;
+  moveEvent(input: MoveEventInput): ResultAsync<CalendarEvent, GoogleError | InvalidInputError>;
+  quickAddEvent(input: QuickAddEventInput): ResultAsync<CalendarEvent, GoogleError | InvalidInputError>;
+  importEvent(input: ImportEventInput): ResultAsync<CalendarEvent, GoogleError | InvalidInputError>;
   queryFreeBusy(input: FreeBusyInput): ResultAsync<FreeBusyResult, GoogleError | InvalidInputError>;
+  getCalendar(input: CalendarRef): ResultAsync<Calendar, GoogleError>;
+  createCalendar(input: CreateCalendarInput): ResultAsync<Calendar, GoogleError | InvalidInputError>;
+  updateCalendar(input: UpdateCalendarInput): ResultAsync<Calendar, GoogleError | InvalidInputError>;
+  deleteCalendar(input: DeleteCalendarInput): ResultAsync<void, GoogleError | InvalidInputError>;
+  // Deletes EVERY event of the primary calendar.
+  clearPrimaryCalendar(): ResultAsync<void, GoogleError>;
+  getCalendarListEntry(input: CalendarRef): ResultAsync<CalendarListEntry, GoogleError>;
+  subscribeCalendar(input: SubscribeCalendarInput): ResultAsync<CalendarListEntry, GoogleError | InvalidInputError>;
+  updateCalendarListEntry(input: UpdateCalendarListEntryInput): ResultAsync<CalendarListEntry, GoogleError | InvalidInputError>;
+  unsubscribeCalendar(input: UnsubscribeCalendarInput): ResultAsync<void, GoogleError | InvalidInputError>;
+  listCalendarAcl(input: ListCalendarAclInput): ResultAsync<AclPage, GoogleError | InvalidInputError>;
+  getCalendarAclRule(input: AclRuleRef): ResultAsync<AclRule, GoogleError>;
+  insertCalendarAclRule(input: InsertAclRuleInput): ResultAsync<AclRule, GoogleError | InvalidInputError>;
+  updateCalendarAclRule(input: UpdateAclRuleInput): ResultAsync<AclRule, GoogleError>;
+  deleteCalendarAclRule(input: AclRuleRef): ResultAsync<void, GoogleError>;
+  getColors(): ResultAsync<ColorPalettes, GoogleError>;
+  listSettings(): ResultAsync<readonly Setting[], GoogleError>;
+  getSetting(input: SettingRef): ResultAsync<Setting, GoogleError | InvalidInputError>;
 }
 
 export type CalendarServiceDeps = { readonly client: GoogleClient };
 
-// ---- request building ----
-
-const calendarIdOf = (input: { readonly calendarId?: string }): string => input.calendarId ?? PRIMARY_CALENDAR;
-
-// Calendar ids look like `ja.japanese#holiday@group.v.calendar.google.com`, so every path segment is encoded.
-const eventsURL = (calendarId: string): string => `${BASE_URL}/calendars/${encodeURIComponent(calendarId)}/events`;
-
-const eventURL = (calendarId: string, eventId: string): string => `${eventsURL(calendarId)}/${encodeURIComponent(eventId)}`;
-
-const withCalendarId =
-  (calendarId: string) =>
-  (event: GoogleEvent): CalendarEvent => ({ ...event, calendarId });
-
-const zoneName = (zone: TimeZoneRef): string | null => {
-  switch (zone.kind) {
-    case 'none':
-      return null;
-    case 'iana':
-      return zone.name;
-    default: {
-      const _exhaustive: never = zone;
-      throw new Error(`unhandled time zone: ${JSON.stringify(_exhaustive)}`);
-    }
-  }
-};
-
-// Request bodies go through JSON.stringify: `undefined` fields are not sent, `null` clears a field.
-type CreateTimeBody = { readonly date: string } | { readonly dateTime: string; readonly timeZone: string | undefined };
-
-const toCreateTime = (time: EventTime): CreateTimeBody => {
-  switch (time.kind) {
-    case 'date':
-      return { date: time.date };
-    case 'dateTime':
-      return { dateTime: time.dateTime, timeZone: zoneName(time.timeZone) ?? undefined };
-    default: {
-      const _exhaustive: never = time;
-      throw new Error(`unhandled event time: ${JSON.stringify(_exhaustive)}`);
-    }
-  }
-};
-
-// PATCH merges nested objects, so switching between all-day and timed must null the other
-// variant's fields or Google keeps both and rejects the event.
-// A timed patch sends the zone only when one is named: `none` leaves the stored zone alone
-// (the offset already pins the instant, and recurring series need a zone).
-type PatchTimeBody = { readonly date: string; readonly dateTime: null; readonly timeZone: null } | { readonly dateTime: string; readonly timeZone: string | undefined; readonly date: null };
-
-const toPatchTime = (time: EventTime): PatchTimeBody => {
-  switch (time.kind) {
-    case 'date':
-      return { date: time.date, dateTime: null, timeZone: null };
-    case 'dateTime':
-      return { dateTime: time.dateTime, timeZone: zoneName(time.timeZone) ?? undefined, date: null };
-    default: {
-      const _exhaustive: never = time;
-      throw new Error(`unhandled event time: ${JSON.stringify(_exhaustive)}`);
-    }
-  }
-};
-
-type AttendeeBody = { readonly email: string };
-
-const toAttendees = (emails: readonly string[]): readonly AttendeeBody[] => emails.map((email) => ({ email }));
-
-const toCreateBody = (input: CreateEventInput) => ({
-  summary: input.summary,
-  description: input.description,
-  location: input.location,
-  start: toCreateTime(input.start),
-  end: toCreateTime(input.end),
-  attendees: toAttendees(input.attendees),
-});
-
-// keep → not sent; clear → Google's empty value.
-const patchText = (patch: FieldPatch<string>): string | undefined => {
-  switch (patch.kind) {
-    case 'keep':
-      return undefined;
-    case 'set':
-      return patch.value;
-    case 'clear':
-      return '';
-    default: {
-      const _exhaustive: never = patch;
-      throw new Error(`unhandled patch: ${JSON.stringify(_exhaustive)}`);
-    }
-  }
-};
-
-const patchAttendees = (patch: FieldPatch<readonly string[]>): readonly AttendeeBody[] | undefined => {
-  switch (patch.kind) {
-    case 'keep':
-      return undefined;
-    case 'set':
-      return toAttendees(patch.value);
-    case 'clear':
-      return [];
-    default: {
-      const _exhaustive: never = patch;
-      throw new Error(`unhandled patch: ${JSON.stringify(_exhaustive)}`);
-    }
-  }
-};
-
-type TimePatchBody = { readonly start: PatchTimeBody | undefined; readonly end: PatchTimeBody | undefined };
-
-const patchTime = (patch: TimePatch): TimePatchBody => {
-  switch (patch.kind) {
-    case 'keep':
-      return { start: undefined, end: undefined };
-    case 'set':
-      return { start: toPatchTime(patch.start), end: toPatchTime(patch.end) };
-    default: {
-      const _exhaustive: never = patch;
-      throw new Error(`unhandled time patch: ${JSON.stringify(_exhaustive)}`);
-    }
-  }
-};
-
-const toPatchBody = (input: UpdateEventInput) => ({
-  summary: patchText(input.summary),
-  description: patchText(input.description),
-  location: patchText(input.location),
-  attendees: patchAttendees(input.attendees),
-  ...patchTime(input.time),
-});
-
-type WindowQuery = { readonly timeMin: string | undefined; readonly timeMax: string | undefined };
-
-const windowQuery = (window: TimeWindow): WindowQuery => {
-  switch (window.kind) {
-    case 'all':
-      return { timeMin: undefined, timeMax: undefined };
-    case 'from':
-      return { timeMin: window.timeMin, timeMax: undefined };
-    case 'until':
-      return { timeMin: undefined, timeMax: window.timeMax };
-    case 'between':
-      return { timeMin: window.timeMin, timeMax: window.timeMax };
-    default: {
-      const _exhaustive: never = window;
-      throw new Error(`unhandled window: ${JSON.stringify(_exhaustive)}`);
-    }
-  }
-};
-
-const searchQuery = (search: EventSearch): string | undefined => {
-  switch (search.kind) {
-    case 'none':
-      return undefined;
-    case 'text':
-      return search.text;
-    default: {
-      const _exhaustive: never = search;
-      throw new Error(`unhandled search: ${JSON.stringify(_exhaustive)}`);
-    }
-  }
-};
-
-const pageQuery = (page: PageRequest): string | undefined => {
-  switch (page.kind) {
-    case 'first':
-      return undefined;
-    case 'next':
-      return page.pageToken;
-    default: {
-      const _exhaustive: never = page;
-      throw new Error(`unhandled page: ${JSON.stringify(_exhaustive)}`);
-    }
-  }
-};
-
-// ---- service ----
-
-// Walks every page of the calendar list, accumulating entries until there is no next page.
-const listCalendarsFrom = (client: GoogleClient, page: PageRequest, collected: readonly CalendarSummary[]): ResultAsync<readonly CalendarSummary[], GoogleError> =>
-  client.request({ method: 'GET', url: `${BASE_URL}/users/me/calendarList`, query: { maxResults: 250, pageToken: pageQuery(page) }, schema: calendarListPageSchema }).andThen((result) => {
-    const calendars = [...collected, ...result.items];
-    switch (result.nextPage.kind) {
-      case 'none':
-        return okAsync(calendars);
-      case 'next':
-        return listCalendarsFrom(client, result.nextPage, calendars);
-      default: {
-        const _exhaustive: never = result.nextPage;
-        throw new Error(`unhandled page: ${JSON.stringify(_exhaustive)}`);
-      }
-    }
-  });
-
-const listEvents = (client: GoogleClient, input: ListEventsInput): ResultAsync<EventPage, GoogleError | InvalidInputError> => {
-  const calendarId = calendarIdOf(input);
-  return validateTimeWindow(input.window)
-    .andThen(() => validateSearch(input.search))
-    .andThen(() => validateMaxResults(input.maxResults))
-    .asyncAndThen(() =>
-      client.request({
-        method: 'GET',
-        url: eventsURL(calendarId),
-        // singleEvents expands recurring events into instances, which orderBy=startTime requires.
-        query: { singleEvents: true, orderBy: 'startTime', ...windowQuery(input.window), q: searchQuery(input.search), maxResults: input.maxResults, pageToken: pageQuery(input.page) },
-        schema: eventListPageSchema,
-      }),
-    )
-    .map((page) => ({ events: page.items.map(withCalendarId(calendarId)), nextPage: page.nextPage }));
-};
-
+// Each method delegates to its resource module's `(client, input)` function.
 export const createCalendarService = ({ client }: CalendarServiceDeps): ICalendarService => ({
-  listCalendars: () => listCalendarsFrom(client, { kind: 'first' }, []),
+  listCalendars: () => listCalendars(client),
   listEvents: (input) => listEvents(client, input),
-  getEvent: (input) => {
-    const calendarId = calendarIdOf(input);
-    return client.request({ method: 'GET', url: eventURL(calendarId, input.eventId), schema: eventSchema }).map(withCalendarId(calendarId));
-  },
-  createEvent: (input) => {
-    const calendarId = calendarIdOf(input);
-    return validateEventRange(input)
-      .asyncAndThen(() => client.request({ method: 'POST', url: eventsURL(calendarId), body: toCreateBody(input), schema: eventSchema }))
-      .map(withCalendarId(calendarId));
-  },
-  updateEvent: (input) => {
-    const calendarId = calendarIdOf(input);
-    return validateEventUpdate(input)
-      .asyncAndThen(() => client.request({ method: 'PATCH', url: eventURL(calendarId, input.eventId), body: toPatchBody(input), schema: eventSchema }))
-      .map(withCalendarId(calendarId));
-  },
-  deleteEvent: (input) => client.request({ method: 'DELETE', url: eventURL(calendarIdOf(input), input.eventId), schema: z.undefined() }).map(() => undefined),
-  queryFreeBusy: (input) =>
-    validateFreeBusy(input).asyncAndThen(() =>
-      client.request({
-        method: 'POST',
-        url: `${BASE_URL}/freeBusy`,
-        body: { timeMin: input.timeMin, timeMax: input.timeMax, items: input.calendarIds.map((id) => ({ id })) },
-        schema: freeBusySchema,
-      }),
-    ),
+  listEventInstances: (input) => listEventInstances(client, input),
+  getEvent: (input) => getEvent(client, input),
+  createEvent: (input) => createEvent(client, input),
+  updateEvent: (input) => updateEvent(client, input),
+  deleteEvent: (input) => deleteEvent(client, input),
+  moveEvent: (input) => moveEvent(client, input),
+  quickAddEvent: (input) => quickAddEvent(client, input),
+  importEvent: (input) => importEvent(client, input),
+  queryFreeBusy: (input) => queryFreeBusy(client, input),
+  getCalendar: (input) => getCalendar(client, input),
+  createCalendar: (input) => createCalendar(client, input),
+  updateCalendar: (input) => updateCalendar(client, input),
+  deleteCalendar: (input) => deleteCalendar(client, input),
+  clearPrimaryCalendar: () => clearPrimaryCalendar(client),
+  getCalendarListEntry: (input) => getCalendarListEntry(client, input),
+  subscribeCalendar: (input) => subscribeCalendar(client, input),
+  updateCalendarListEntry: (input) => updateCalendarListEntry(client, input),
+  unsubscribeCalendar: (input) => unsubscribeCalendar(client, input),
+  listCalendarAcl: (input) => listCalendarAcl(client, input),
+  getCalendarAclRule: (input) => getCalendarAclRule(client, input),
+  insertCalendarAclRule: (input) => insertCalendarAclRule(client, input),
+  updateCalendarAclRule: (input) => updateCalendarAclRule(client, input),
+  deleteCalendarAclRule: (input) => deleteCalendarAclRule(client, input),
+  getColors: () => getColors(client),
+  listSettings: () => listSettings(client),
+  getSetting: (input) => getSetting(client, input),
 });

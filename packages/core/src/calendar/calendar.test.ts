@@ -28,6 +28,33 @@ const serviceWith = (...responses: readonly (() => Response)[]) => {
 
 const BASE = 'https://www.googleapis.com/calendar/v3';
 
+// What an event without any of the richer fields reads as (Google's documented defaults).
+const readDefaults = {
+  eventType: { kind: 'default' },
+  reminders: { kind: 'default' },
+  color: { kind: 'calendar' },
+  visibility: 'default',
+  transparency: 'opaque',
+  guests: { canModify: false, canInviteOthers: true, canSeeOtherGuests: true },
+  conference: { kind: 'none' },
+  hangoutLink: '',
+} as const;
+
+// The richer create fields at the values the old tests implicitly used, and the bodies they produce.
+const createDefaults = {
+  recurrence: [],
+  reminders: { kind: 'default' },
+  color: { kind: 'calendar' },
+  visibility: 'default',
+  transparency: 'opaque',
+  guests: { canModify: false, canInviteOthers: true, canSeeOtherGuests: true },
+  conference: { kind: 'none' },
+  eventType: { kind: 'default' },
+  sendUpdates: 'none',
+} as const;
+
+const createDefaultsBody = { reminders: { useDefault: true }, visibility: 'default', transparency: 'opaque', guestsCanModify: false, guestsCanInviteOthers: true, guestsCanSeeOtherGuests: true };
+
 const noZone = { kind: 'none' } as const;
 const tokyo = { kind: 'iana', name: 'Asia/Tokyo' } as const;
 const dateTime = (value: string): EventTime => ({ kind: 'dateTime', dateTime: value, timeZone: noZone });
@@ -130,10 +157,11 @@ describe('getEvent', () => {
       end: { kind: 'dateTime', dateTime: '2026-11-17T10:30:00+09:00', timeZone: tokyo },
       htmlLink: 'https://www.google.com/calendar/event?eid=x',
       attendees: [
-        { email: 'a@example.com', responseStatus: 'accepted' },
-        { email: 'b@example.com', responseStatus: 'needsAction' },
+        { email: 'a@example.com', responseStatus: 'accepted', optional: false },
+        { email: 'b@example.com', responseStatus: 'needsAction', optional: false },
       ],
       recurrence: { kind: 'instance', recurringEventId: 'rec1', originalStartTime: { kind: 'dateTime', dateTime: '2026-11-17T10:00:00+09:00', timeZone: tokyo } },
+      ...readDefaults,
       created: '2026-11-01T00:00:00.000Z',
       updated: '2026-11-02T00:00:00.000Z',
     });
@@ -164,6 +192,7 @@ describe('getEvent', () => {
       htmlLink: 'https://www.google.com/calendar/event?eid=y',
       attendees: [],
       recurrence: { kind: 'single' },
+      ...readDefaults,
       created: '2026-11-01T00:00:00.000Z',
       updated: '2026-11-01T00:00:00.000Z',
     });
@@ -342,18 +371,26 @@ describe('createEvent', () => {
       location: 'Room 1',
       start: { kind: 'dateTime', dateTime: '2026-11-17T10:00:00+09:00', timeZone: tokyo },
       end: dateTime('2026-11-17T10:30:00+09:00'),
-      attendees: ['a@example.com', 'b@example.com'],
+      attendees: [
+        { email: 'a@example.com', optional: false },
+        { email: 'b@example.com', optional: false },
+      ],
+      ...createDefaults,
     });
 
     expect(calls[0]?.method).toBe('POST');
-    expect(calls[0]?.url.href).toBe(`${BASE}/calendars/primary/events`);
+    expect(calls[0]?.url.href).toBe(`${BASE}/calendars/primary/events?sendUpdates=none`);
     expect(calls[0]?.body).toEqual({
+      ...createDefaultsBody,
       summary: 'Standup',
       description: 'Daily',
       location: 'Room 1',
       start: { dateTime: '2026-11-17T10:00:00+09:00', timeZone: 'Asia/Tokyo' },
       end: { dateTime: '2026-11-17T10:30:00+09:00' },
-      attendees: [{ email: 'a@example.com' }, { email: 'b@example.com' }],
+      attendees: [
+        { email: 'a@example.com', optional: false },
+        { email: 'b@example.com', optional: false },
+      ],
     });
     expect(result._unsafeUnwrap()).toMatchObject({ id: 'evt1', calendarId: 'primary' });
   });
@@ -361,17 +398,34 @@ describe('createEvent', () => {
   it('POSTs a one-day all-day event as Google {date} times with an exclusive end date', async () => {
     const { service, calls } = serviceWith(() => json({ ...bareEvent, start: { date: '2026-11-17' }, end: { date: '2026-11-18' } }));
 
-    const result = await service.createEvent({ calendarId: 'team@example.com', summary: 'Off', description: '', location: '', start: date('2026-11-17'), end: date('2026-11-18'), attendees: [] });
+    const result = await service.createEvent({
+      calendarId: 'team@example.com',
+      summary: 'Off',
+      description: '',
+      location: '',
+      start: date('2026-11-17'),
+      end: date('2026-11-18'),
+      attendees: [],
+      ...createDefaults,
+    });
 
     expect(calls[0]?.url.pathname).toBe('/calendar/v3/calendars/team%40example.com/events');
-    expect(calls[0]?.body).toEqual({ summary: 'Off', description: '', location: '', start: { date: '2026-11-17' }, end: { date: '2026-11-18' }, attendees: [] });
+    expect(calls[0]?.body).toEqual({ summary: 'Off', description: '', location: '', start: { date: '2026-11-17' }, end: { date: '2026-11-18' }, attendees: [], ...createDefaultsBody });
     expect(result._unsafeUnwrap()).toMatchObject({ calendarId: 'team@example.com', start: { kind: 'date', date: '2026-11-17' } });
   });
 
   it('accepts a timed range whose end uses a different offset but is later', async () => {
     const { service } = serviceWith(() => json(timedEvent));
 
-    const result = await service.createEvent({ summary: 'x', description: '', location: '', start: dateTime('2026-11-17T10:00:00+09:00'), end: dateTime('2026-11-17T02:00:00Z'), attendees: [] });
+    const result = await service.createEvent({
+      summary: 'x',
+      description: '',
+      location: '',
+      start: dateTime('2026-11-17T10:00:00+09:00'),
+      end: dateTime('2026-11-17T02:00:00Z'),
+      attendees: [],
+      ...createDefaults,
+    });
 
     expect(result.isOk()).toBe(true);
   });
@@ -395,7 +449,7 @@ describe('createEvent', () => {
   ] satisfies readonly (readonly [string, EventTime, EventTime, readonly string[]])[])('rejects %s before calling Google', async (_label, start, end, fragments) => {
     const { service, calls } = serviceWith(() => json(timedEvent));
 
-    const error = (await service.createEvent({ summary: 'x', description: '', location: '', start, end, attendees: [] }))._unsafeUnwrapErr();
+    const error = (await service.createEvent({ summary: 'x', description: '', location: '', start, end, attendees: [], ...createDefaults }))._unsafeUnwrapErr();
 
     expectInvalid(error, fragments);
     expect(calls).toHaveLength(0);
@@ -409,17 +463,28 @@ const keepAll: UpdateEventInput = {
   location: { kind: 'keep' },
   attendees: { kind: 'keep' },
   time: { kind: 'keep' },
+  recurrence: { kind: 'keep' },
+  reminders: { kind: 'keep' },
+  color: { kind: 'keep' },
+  visibility: { kind: 'keep' },
+  transparency: { kind: 'keep' },
+  guestsCanModify: { kind: 'keep' },
+  guestsCanInviteOthers: { kind: 'keep' },
+  guestsCanSeeOtherGuests: { kind: 'keep' },
+  conference: { kind: 'keep' },
+  statusProperties: { kind: 'keep' },
+  sendUpdates: 'none',
 };
 
 describe('updateEvent', () => {
   it('PATCHes only the fields that are set and returns the updated event', async () => {
     const { service, calls } = serviceWith(() => json(timedEvent));
 
-    const result = await service.updateEvent({ ...keepAll, summary: { kind: 'set', value: 'Renamed' }, attendees: { kind: 'set', value: ['c@example.com'] } });
+    const result = await service.updateEvent({ ...keepAll, summary: { kind: 'set', value: 'Renamed' }, attendees: { kind: 'set', value: [{ email: 'c@example.com', optional: false }] } });
 
     expect(calls[0]?.method).toBe('PATCH');
-    expect(calls[0]?.url.href).toBe(`${BASE}/calendars/primary/events/evt1`);
-    expect(calls[0]?.body).toEqual({ summary: 'Renamed', attendees: [{ email: 'c@example.com' }] });
+    expect(calls[0]?.url.href).toBe(`${BASE}/calendars/primary/events/evt1?sendUpdates=none`);
+    expect(calls[0]?.body).toEqual({ summary: 'Renamed', attendees: [{ email: 'c@example.com', optional: false }] });
     expect(result._unsafeUnwrap()).toMatchObject({ id: 'evt1', calendarId: 'primary' });
   });
 
@@ -479,17 +544,17 @@ describe('deleteEvent', () => {
   it('DELETEs the event and succeeds on 204', async () => {
     const { service, calls } = serviceWith(() => new Response(null, { status: 204 }));
 
-    const result = await service.deleteEvent({ calendarId: 'a#b@c', eventId: 'evt1' });
+    const result = await service.deleteEvent({ calendarId: 'a#b@c', eventId: 'evt1', sendUpdates: 'none' });
 
     expect(calls[0]?.method).toBe('DELETE');
-    expect(calls[0]?.url.href).toBe(`${BASE}/calendars/a%23b%40c/events/evt1`);
+    expect(calls[0]?.url.href).toBe(`${BASE}/calendars/a%23b%40c/events/evt1?sendUpdates=none`);
     expect(result.isOk()).toBe(true);
   });
 
   it('fails with GoogleNotFoundError when the event is already gone (410)', async () => {
     const { service } = serviceWith(() => json({ error: { code: 410, message: 'Resource has been deleted' } }, 410));
 
-    const result = await service.deleteEvent({ eventId: 'evt1' });
+    const result = await service.deleteEvent({ eventId: 'evt1', sendUpdates: 'none' });
 
     expect(result._unsafeUnwrapErr()).toBeInstanceOf(GoogleNotFoundError);
   });
