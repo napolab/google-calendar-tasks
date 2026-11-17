@@ -114,6 +114,22 @@ export type KeepOrSet<T> = { readonly kind: 'keep' } | { readonly kind: 'set'; r
 
 export type FieldPatch<T> = KeepOrSet<T> | { readonly kind: 'clear' };
 
+// Task-list operations always name their list: a create / rename / delete must never fall back to a default.
+// `taskListId` may be `'@default'` for get and rename; deleteTaskList rejects it (Google cannot delete the default list).
+export type TaskListRef = {
+  readonly taskListId: string;
+};
+
+export type CreateTaskListInput = {
+  // Non-blank, at most 1024 characters (Google's limit).
+  readonly title: string;
+};
+
+export type RenameTaskListInput = TaskListRef & {
+  // Non-blank, at most 1024 characters (Google's limit).
+  readonly title: string;
+};
+
 export type UpdateTaskInput = TaskRef & {
   // A task always has a title, so it can be replaced but not cleared.
   readonly title: KeepOrSet<string>;
@@ -124,6 +140,10 @@ export type UpdateTaskInput = TaskRef & {
 
 export interface ITasksService {
   listTaskLists(): ResultAsync<readonly TaskListSummary[], GoogleError>;
+  getTaskList(input: TaskListRef): ResultAsync<TaskListSummary, GoogleError>;
+  createTaskList(input: CreateTaskListInput): ResultAsync<TaskListSummary, GoogleError | InvalidInputError>;
+  renameTaskList(input: RenameTaskListInput): ResultAsync<TaskListSummary, GoogleError | InvalidInputError>;
+  deleteTaskList(input: TaskListRef): ResultAsync<void, GoogleError | InvalidInputError>;
   listTasks(input: ListTasksInput): ResultAsync<TaskPage, GoogleError | InvalidInputError>;
   getTask(input: TaskRef): ResultAsync<Task, GoogleError>;
   createTask(input: CreateTaskInput): ResultAsync<Task, GoogleError | InvalidInputError>;
@@ -241,6 +261,10 @@ const toTaskPage =
 // URLs
 // ---------------------------------------------------------------------------------------------
 
+const TASK_LISTS_URL = `${BASE_URL}/users/@me/lists`;
+
+const taskListURL = (taskListId: string): string => `${TASK_LISTS_URL}/${encodeURIComponent(taskListId)}`;
+
 const resolveTaskListId = (target: TaskListTarget): string => target.taskListId ?? DEFAULT_TASK_LIST_ID;
 
 const tasksURL = (taskListId: string): string => `${BASE_URL}/lists/${encodeURIComponent(taskListId)}/tasks`;
@@ -327,11 +351,59 @@ const toGoogleDueMax = (date: string): string => dayjs.utc(date).endOf('day').to
 // ---------------------------------------------------------------------------------------------
 
 const fetchTaskListPages = (client: GoogleClient, pageToken: string | undefined, acc: readonly TaskListSummary[]): ResultAsync<readonly TaskListSummary[], GoogleError> =>
-  client.request({ method: 'GET', url: `${BASE_URL}/users/@me/lists`, query: { pageToken }, schema: wireTaskListsSchema }).andThen((page) => {
+  client.request({ method: 'GET', url: TASK_LISTS_URL, query: { pageToken }, schema: wireTaskListsSchema }).andThen((page) => {
     const collected = [...acc, ...page.items.map(toSummary)];
     if (page.nextPageToken === undefined) return okAsync(collected);
     return fetchTaskListPages(client, page.nextPageToken, collected);
   });
+
+// ---------------------------------------------------------------------------------------------
+// getTaskList / createTaskList / renameTaskList / deleteTaskList (tasklists.get / insert / patch / delete)
+// ---------------------------------------------------------------------------------------------
+
+// Google's limit on a task list title.
+const MAX_TASK_LIST_TITLE_LENGTH = 1024;
+
+// Shared with the CLI and the MCP server so they can reject a bad title before resolving the list.
+export const validateTaskListTitle = (title: string): Result<string, InvalidInputError> => {
+  if (title.trim() === '') return err(new InvalidInputError(`Invalid title "${title}": a task list title must not be empty or only whitespace. Pass a non-empty title.`));
+  if (title.length <= MAX_TASK_LIST_TITLE_LENGTH) return ok(title);
+  return err(new InvalidInputError(`Invalid title: a task list title is at most ${MAX_TASK_LIST_TITLE_LENGTH} characters, got ${title.length}. Pass a shorter title.`));
+};
+
+// Google cannot delete the user's default task list (tasklists.delete), so the alias is rejected before any request.
+// A blank value is rejected too: as a title it would match an untitled list, and a destructive call must name its list.
+// Shared with the CLI and the MCP server so they can reject both before looking the list up.
+// The default list addressed by its real id is only caught by Google.
+export const validateDeletableTaskListId = (taskListId: string): Result<string, InvalidInputError> => {
+  if (taskListId.trim() === '') return err(new InvalidInputError(`Invalid task list "${taskListId}": name the list to delete by its id or title (it must not be empty or only whitespace).`));
+  if (taskListId !== DEFAULT_TASK_LIST_ID) return ok(taskListId);
+  return err(
+    new InvalidInputError(
+      `Cannot delete "${DEFAULT_TASK_LIST_ID}": the default task list cannot be deleted (Google does not allow it). Pass the id of another task list instead, or rename the default list if you only want a different title.`,
+    ),
+  );
+};
+
+const getTaskList =
+  (client: GoogleClient) =>
+  (input: TaskListRef): ResultAsync<TaskListSummary, GoogleError> =>
+    client.request({ method: 'GET', url: taskListURL(input.taskListId), schema: wireTaskListSchema }).map(toSummary);
+
+const createTaskList =
+  (client: GoogleClient) =>
+  (input: CreateTaskListInput): ResultAsync<TaskListSummary, GoogleError | InvalidInputError> =>
+    validateTaskListTitle(input.title).asyncAndThen((title) => client.request({ method: 'POST', url: TASK_LISTS_URL, body: { title }, schema: wireTaskListSchema }).map(toSummary));
+
+const renameTaskList =
+  (client: GoogleClient) =>
+  (input: RenameTaskListInput): ResultAsync<TaskListSummary, GoogleError | InvalidInputError> =>
+    validateTaskListTitle(input.title).asyncAndThen((title) => client.request({ method: 'PATCH', url: taskListURL(input.taskListId), body: { title }, schema: wireTaskListSchema }).map(toSummary));
+
+const deleteTaskList =
+  (client: GoogleClient) =>
+  (input: TaskListRef): ResultAsync<void, GoogleError | InvalidInputError> =>
+    validateDeletableTaskListId(input.taskListId).asyncAndThen((taskListId) => client.request({ method: 'DELETE', url: taskListURL(taskListId), schema: z.undefined() }));
 
 // ---------------------------------------------------------------------------------------------
 // listTasks
@@ -655,6 +727,10 @@ export const resolveTaskList = (lists: readonly TaskListSummary[], query: string
 
 export const createTasksService = (deps: TasksServiceDeps): ITasksService => ({
   listTaskLists: () => fetchTaskListPages(deps.client, undefined, []),
+  getTaskList: getTaskList(deps.client),
+  createTaskList: createTaskList(deps.client),
+  renameTaskList: renameTaskList(deps.client),
+  deleteTaskList: deleteTaskList(deps.client),
   listTasks: listTasks(deps.client),
   getTask: getTask(deps.client),
   createTask: createTask(deps.client),

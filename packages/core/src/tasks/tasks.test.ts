@@ -559,3 +559,167 @@ describe('resolveTaskList', () => {
     expect(error.message).not.toContain('L3');
   });
 });
+
+const wireTaskList = { kind: 'tasks#taskList', id: 'L1', etag: '"e"', title: 'Work', updated: '2026-11-17T01:02:03.000Z', selfLink: 'https://www.googleapis.com/tasks/v1/users/@me/lists/L1' };
+
+const normalizedTaskList = { id: 'L1', title: 'Work', updated: '2026-11-17T01:02:03.000Z' };
+
+const neverCalledList = () => serviceWith(() => json(wireTaskList));
+
+describe('getTaskList', () => {
+  it('GETs users/@me/lists/{id} and normalizes the list', async () => {
+    const { service, calls } = serviceWith(() => json(wireTaskList));
+
+    const result = await service.getTaskList({ taskListId: 'L1' });
+
+    expect(calls[0]?.init?.method).toBe('GET');
+    expect(calls[0]?.url).toBe(`${BASE}/users/@me/lists/L1`);
+    expect(result._unsafeUnwrap()).toStrictEqual(normalizedTaskList);
+  });
+
+  it('accepts @default and URL-encodes the id', async () => {
+    const { service, calls } = serviceWith(() => json(wireTaskList));
+
+    await service.getTaskList({ taskListId: '@default' });
+    await service.getTaskList({ taskListId: 'a/b c' });
+
+    expect(calls.map((call) => call.url)).toStrictEqual([`${BASE}/users/@me/lists/%40default`, `${BASE}/users/@me/lists/a%2Fb%20c`]);
+  });
+
+  it('propagates GoogleNotFoundError', async () => {
+    const { service } = serviceWith(() => json({ error: { code: 404, message: 'gone' } }, 404));
+
+    const result = await service.getTaskList({ taskListId: 'nope' });
+
+    expect(result._unsafeUnwrapErr()).toBeInstanceOf(GoogleNotFoundError);
+  });
+});
+
+describe('createTaskList', () => {
+  it('POSTs the title to users/@me/lists and returns the new list', async () => {
+    const { service, calls } = serviceWith(() => json(wireTaskList));
+
+    const result = await service.createTaskList({ title: 'Work' });
+
+    expect(calls[0]?.init?.method).toBe('POST');
+    expect(calls[0]?.url).toBe(`${BASE}/users/@me/lists`);
+    expect(bodyOf(calls[0])).toStrictEqual({ title: 'Work' });
+    expect(result._unsafeUnwrap()).toStrictEqual(normalizedTaskList);
+  });
+
+  it.each(['', '   ', '　\n'])('rejects the blank title %j without calling Google', async (title) => {
+    const { service, calls } = neverCalledList();
+
+    const result = await service.createTaskList({ title });
+
+    const error = result._unsafeUnwrapErr();
+    expect(error).toBeInstanceOf(InvalidInputError);
+    expect(error.message).toContain(`"${title}"`);
+    expect(error.message).toContain('task list title');
+    expect(error.message).toContain('non-empty');
+    expect(calls).toHaveLength(0);
+  });
+
+  it('rejects a title longer than 1024 characters without calling Google', async () => {
+    const { service, calls } = neverCalledList();
+
+    const result = await service.createTaskList({ title: 'x'.repeat(1025) });
+
+    const error = result._unsafeUnwrapErr();
+    expect(error).toBeInstanceOf(InvalidInputError);
+    expect(error.message).toContain('1025');
+    expect(error.message).toContain('1024');
+    expect(calls).toHaveLength(0);
+  });
+
+  it('accepts a title of exactly 1024 characters', async () => {
+    const { service } = serviceWith(() => json(wireTaskList));
+
+    expect((await service.createTaskList({ title: 'x'.repeat(1024) })).isOk()).toBe(true);
+  });
+});
+
+describe('renameTaskList', () => {
+  it('PATCHes only the title of users/@me/lists/{id} and returns the renamed list', async () => {
+    const { service, calls } = serviceWith(() => json(wireTaskList));
+
+    const result = await service.renameTaskList({ taskListId: 'L1', title: 'Work' });
+
+    expect(calls[0]?.init?.method).toBe('PATCH');
+    expect(calls[0]?.url).toBe(`${BASE}/users/@me/lists/L1`);
+    expect(bodyOf(calls[0])).toStrictEqual({ title: 'Work' });
+    expect(result._unsafeUnwrap()).toStrictEqual(normalizedTaskList);
+  });
+
+  it('accepts @default and URL-encodes the id', async () => {
+    const { service, calls } = serviceWith(() => json(wireTaskList));
+
+    await service.renameTaskList({ taskListId: '@default', title: 'Inbox' });
+
+    expect(calls[0]?.url).toBe(`${BASE}/users/@me/lists/%40default`);
+  });
+
+  it('rejects a blank title without calling Google', async () => {
+    const { service, calls } = neverCalledList();
+
+    const result = await service.renameTaskList({ taskListId: 'L1', title: ' ' });
+
+    const error = result._unsafeUnwrapErr();
+    expect(error).toBeInstanceOf(InvalidInputError);
+    expect(error.message).toContain('task list title');
+    expect(calls).toHaveLength(0);
+  });
+
+  it('propagates GoogleNotFoundError', async () => {
+    const { service } = serviceWith(() => json({ error: { code: 404, message: 'gone' } }, 404));
+
+    const result = await service.renameTaskList({ taskListId: 'nope', title: 'x' });
+
+    expect(result._unsafeUnwrapErr()).toBeInstanceOf(GoogleNotFoundError);
+  });
+});
+
+describe('deleteTaskList', () => {
+  it('DELETEs users/@me/lists/{id} and resolves to undefined on 204', async () => {
+    const { service, calls } = serviceWith(() => new Response(null, { status: 204 }));
+
+    const result = await service.deleteTaskList({ taskListId: 'a/b' });
+
+    expect(calls[0]?.init?.method).toBe('DELETE');
+    expect(calls[0]?.url).toBe(`${BASE}/users/@me/lists/a%2Fb`);
+    expect(result._unsafeUnwrap()).toBeUndefined();
+  });
+
+  it('rejects @default without calling Google: the default list cannot be deleted', async () => {
+    const { service, calls } = neverCalledList();
+
+    const result = await service.deleteTaskList({ taskListId: '@default' });
+
+    const error = result._unsafeUnwrapErr();
+    expect(error).toBeInstanceOf(InvalidInputError);
+    expect(error.message).toContain('"@default"');
+    expect(error.message).toContain('default task list cannot be deleted');
+    expect(error.message).toContain('id of another task list');
+    expect(calls).toHaveLength(0);
+  });
+
+  it.each(['', ' \t'])('rejects the blank id %j without calling Google', async (taskListId) => {
+    const { service, calls } = neverCalledList();
+
+    const result = await service.deleteTaskList({ taskListId });
+
+    const error = result._unsafeUnwrapErr();
+    expect(error).toBeInstanceOf(InvalidInputError);
+    expect(error.message).toContain(`"${taskListId}"`);
+    expect(error.message).toContain('id or title');
+    expect(calls).toHaveLength(0);
+  });
+
+  it('propagates GoogleNotFoundError', async () => {
+    const { service } = serviceWith(() => json({ error: { code: 404, message: 'gone' } }, 404));
+
+    const result = await service.deleteTaskList({ taskListId: 'nope' });
+
+    expect(result._unsafeUnwrapErr()).toBeInstanceOf(GoogleNotFoundError);
+  });
+});
