@@ -8,10 +8,10 @@ export const BOARD_STATUSES: readonly BoardStatus[] = ['todo', 'doing', 'done'];
 
 export type SubtaskCounts = Readonly<Record<BoardStatus, number>>;
 
-// root: a top-level task (counts of its subtasks per column; all 0 = no subtasks).
+// root: a top-level task (counts of its subtasks per column; all 0 = no subtasks). subtaskCountsPartial: the list was truncated, so some subtasks may be missing from the counts.
 // subtask: shown under its parent's title. orphan: a subtask whose parent is not in the page (never reordered).
 export type CardNesting =
-  | { readonly kind: 'root'; readonly subtaskCounts: SubtaskCounts }
+  | { readonly kind: 'root'; readonly subtaskCounts: SubtaskCounts; readonly subtaskCountsPartial: boolean }
   | { readonly kind: 'subtask'; readonly parentId: string; readonly parentTitle: string }
   | { readonly kind: 'orphan' };
 
@@ -80,7 +80,7 @@ const countSubtasks = (task: ListedTaskItem, list: TaskListPage): SubtaskCounts 
 const nestingOf = (task: ListedTaskItem, list: TaskListPage): CardNesting => {
   switch (task.parent.kind) {
     case 'root':
-      return task.depth === 0 ? { kind: 'root', subtaskCounts: countSubtasks(task, list) } : { kind: 'orphan' };
+      return task.depth === 0 ? { kind: 'root', subtaskCounts: countSubtasks(task, list), subtaskCountsPartial: list.truncated } : { kind: 'orphan' };
     case 'subtask': {
       const { parentId } = task.parent;
       const parent = list.tasks.find((other) => other.id === parentId);

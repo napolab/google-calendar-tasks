@@ -55,3 +55,8 @@
 - `apps/mcp/src/task-board-ui/view`, `main.ts`, `styles.css`：ラベル・内訳の表示、入れ子一覧の削除、`move_task` に `parentId` を渡す
 - `apps/mcp/src/mcp/task-board`：`show_task_board` の説明文（"subtasks nested in their parent card" を書き換える）
 - `README.md`：タスクボードの節
+
+## 追記（2026-11-18）
+
+- トップレベルのカードの並べ替え：親とそのサブタスクのまとまりの中には落とせない（拒否してお知らせを出す）。それ以外は、落とした位置より上にある同じリストの最も近いカードの「家族」（親とそのサブタスク）の後ろに入る。
+- 内訳の末尾に「（先頭 100 件まで）」を付ける：一覧が 100 件で切られている場合、サブタスクの数が足りない可能性があるため。

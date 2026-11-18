@@ -63,8 +63,16 @@ describe('buildBoard', () => {
   it('counts a parent’s subtasks per column, wherever they are shown', () => {
     const cards = buildBoard([work], { kind: 'all' }, '2026-11-17').columns[0]?.cards ?? [];
 
-    expect(cards.find((card) => card.task.id === 'a')?.nesting).toEqual({ kind: 'root', subtaskCounts: { todo: 1, doing: 0, done: 1 } });
-    expect(cards.find((card) => card.task.id === 'd')?.nesting).toEqual({ kind: 'root', subtaskCounts: { todo: 0, doing: 0, done: 0 } });
+    expect(cards.find((card) => card.task.id === 'a')?.nesting).toEqual({ kind: 'root', subtaskCounts: { todo: 1, doing: 0, done: 1 }, subtaskCountsPartial: false });
+    expect(cards.find((card) => card.task.id === 'd')?.nesting).toEqual({ kind: 'root', subtaskCounts: { todo: 0, doing: 0, done: 0 }, subtaskCountsPartial: false });
+  });
+
+  it('flags a root card of a truncated list as having possibly partial subtask counts', () => {
+    const truncated: TaskListPage = { ...work, truncated: true };
+    const root = (list: TaskListPage) => buildBoard([list], { kind: 'all' }, '2026-11-17').columns[0]?.cards.find((c) => c.task.id === 'a')?.nesting;
+
+    expect(root(truncated)).toMatchObject({ kind: 'root', subtaskCountsPartial: true });
+    expect(root(work)).toMatchObject({ kind: 'root', subtaskCountsPartial: false });
   });
 
   it('shows only the selected list (no list badge), and every list with badges for all', () => {

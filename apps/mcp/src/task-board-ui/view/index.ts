@@ -83,7 +83,7 @@ const header = (model: ViewModel, handlers: ViewHandlers): HTMLElement => {
     el('div', { class: 'bar-row' }, [el('h1', { class: 'title' }, ['タスクボード']), el('div', { class: 'tools' }, [refresh, ...fullscreenButton(model, handlers)])]),
     lists,
     el('p', { class: 'hint', id: 'board-hint' }, [
-      'カードをドラッグして列を移動・並べ替えできます。並べ替えは同じリストのタスク同士、サブタスクは同じ親のサブタスク同士の間だけ（「完了」列は並べ替え不可）。キーボードでは各カードのボタンを使います。',
+      'カードをドラッグして列を移動・並べ替えできます。並べ替えは同じリストの中だけで、サブタスクは同じ親のサブタスクの間だけ、トップレベルのタスクは親とサブタスクの間には置けません（「完了」列は並べ替え不可）。キーボードでは各カードのボタンを使います。',
     ]),
     ...model.board.truncatedLists.map((title) => el('p', { class: 'hint warn' }, [`「${title}」は先頭 100 件だけを表示しています。`])),
   ]);
@@ -160,7 +160,8 @@ const breakdown = (card: BoardCard): readonly Node[] => {
   if (nesting.kind !== 'root') return [];
   const { todo, doing, done } = nesting.subtaskCounts;
   if (todo + doing + done === 0) return [];
-  return [el('p', { class: 'breakdown' }, ['サブタスク ', `${STATUS_LABELS.todo} ${todo} / ${STATUS_LABELS.doing} ${doing} / ${STATUS_LABELS.done} ${done}`])];
+  const partial = nesting.subtaskCountsPartial ? '（先頭 100 件まで）' : '';
+  return [el('p', { class: 'breakdown' }, ['サブタスク ', `${STATUS_LABELS.todo} ${todo} / ${STATUS_LABELS.doing} ${doing} / ${STATUS_LABELS.done} ${done}${partial}`])];
 };
 
 type Direction = 'up' | 'down' | 'left' | 'right';
@@ -276,7 +277,8 @@ const dropTargetFor = (column: BoardColumn, drag: { readonly taskId: string; rea
   drag.from === column.status ? { kind: 'reorder', plan: planReorder(column, drag.taskId, dropIndex(list, clientY)) } : { kind: 'status', to: column.status };
 
 const REJECTED_MESSAGES: Readonly<Record<RejectReason, string>> = {
-  otherList: 'トップレベルのタスクは、同じリストのトップレベルのタスクの間だけで並べ替えできます。',
+  otherList: 'トップレベルのタスクは、同じリストのタスクの間だけで並べ替えできます。',
+  insideFamily: 'トップレベルのタスクは、親タスクとそのサブタスクの間には置けません。',
   otherParent: 'サブタスクは、同じ親のサブタスクの間だけで並べ替えできます。',
   locked: '「完了」列のカードと、親が表示されていないサブタスクは並べ替えできません。',
 };

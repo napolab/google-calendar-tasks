@@ -47,11 +47,6 @@
   box-sizing: border-box;
 }
 
-/* `hidden` must win over the display of the element's class. */
-[hidden] {
-  display: none !important;
-}
-
 html,
 body {
   margin: 0;
