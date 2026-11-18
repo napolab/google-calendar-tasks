@@ -1,9 +1,9 @@
 import { BOARD_STATUSES } from '../board';
 import { adjacentStatus, keyboardTargetIndex, planReorder } from '../moves';
 
-import type { Board, BoardCard, BoardColumn, BoardSubtask } from '../board';
+import type { Board, BoardCard, BoardColumn } from '../board';
 import type { Notice } from '../board-state';
-import type { ReorderPlan } from '../moves';
+import type { RejectReason, ReorderPlan } from '../moves';
 import type { BoardSelection, BoardStatus, TaskItem } from '../wire';
 
 // Thin DOM rendering of the board model. All user text goes through textContent (never innerHTML). Every state change
@@ -12,7 +12,6 @@ import type { BoardSelection, BoardStatus, TaskItem } from '../wire';
 export type ViewModel = {
   readonly board: Board;
   readonly pendingTaskIds: ReadonlySet<string>;
-  readonly collapsedCardIds: ReadonlySet<string>;
   readonly notice: Notice;
   readonly loading: boolean;
   readonly fullscreen: { readonly kind: 'unavailable' } | { readonly kind: 'available'; readonly active: boolean };
@@ -24,7 +23,6 @@ export type ViewHandlers = {
   readonly toggleFullscreen: () => void;
   readonly changeStatus: (task: TaskItem, to: BoardStatus) => void;
   readonly reorder: (plan: ReorderPlan) => void;
-  readonly toggleSubtasks: (cardId: string) => void;
   readonly dismissNotice: () => void;
 };
 
@@ -85,7 +83,7 @@ const header = (model: ViewModel, handlers: ViewHandlers): HTMLElement => {
     el('div', { class: 'bar-row' }, [el('h1', { class: 'title' }, ['タスクボード']), el('div', { class: 'tools' }, [refresh, ...fullscreenButton(model, handlers)])]),
     lists,
     el('p', { class: 'hint', id: 'board-hint' }, [
-      'カードをドラッグして列を移動・並べ替えできます。並べ替えは同じリストのカードの間だけ（「完了」列は並べ替え不可）。キーボードでは各カードのボタンを使います。',
+      'カードをドラッグして列を移動・並べ替えできます。並べ替えは同じリストのタスク同士、サブタスクは同じ親のサブタスク同士の間だけ（「完了」列は並べ替え不可）。キーボードでは各カードのボタンを使います。',
     ]),
     ...model.board.truncatedLists.map((title) => el('p', { class: 'hint warn' }, [`「${title}」は先頭 100 件だけを表示しています。`])),
   ]);
@@ -138,28 +136,31 @@ const checkbox = (task: TaskItem, handlers: ViewHandlers): HTMLInputElement => {
   return input;
 };
 
-const subtaskItem = (subtask: BoardSubtask, handlers: ViewHandlers, pending: ReadonlySet<string>): HTMLLIElement =>
-  el('li', { class: `subtask${subtask.task.boardStatus === 'done' ? ' is-done' : ''}`, 'aria-busy': `${pending.has(subtask.task.id)}` }, [
-    el('label', { class: 'check-row' }, [checkbox(subtask.task, handlers), el('span', { class: 'subtask-title' }, [subtask.task.title === '' ? '（無題）' : subtask.task.title])]),
-    ...dueLabel(subtask.task, subtask.overdue),
-  ]);
+const parentLabel = (text: string, srPrefix: string): HTMLElement =>
+  el('span', { class: 'parent-label' }, [...(srPrefix === '' ? [] : [el('span', { class: 'sr-only' }, [srPrefix])]), el('span', { 'aria-hidden': 'true' }, ['↳']), ` ${text}`]);
 
-const subtasks = (card: BoardCard, model: ViewModel, handlers: ViewHandlers): readonly Node[] => {
-  if (card.subtasks.length === 0) return [];
-  const doneCount = card.subtasks.filter((subtask) => subtask.task.boardStatus === 'done').length;
-  const expanded = !model.collapsedCardIds.has(card.task.id);
-  const listId = `subtasks-${card.task.id}`;
-  return [
-    button('', { class: 'disclosure', 'aria-expanded': `${expanded}`, 'aria-controls': listId, 'data-focus-key': `subtasks:${card.task.id}` }, () => handlers.toggleSubtasks(card.task.id), [
-      el('span', { class: 'arrow', 'aria-hidden': 'true' }),
-      `サブタスク ${doneCount}/${card.subtasks.length}`,
-    ]),
-    el(
-      'ul',
-      { class: 'subtasks', id: listId, ...(expanded ? {} : { hidden: '' }) },
-      card.subtasks.map((subtask) => subtaskItem(subtask, handlers, model.pendingTaskIds)),
-    ),
-  ];
+const nestingMeta = (card: BoardCard): readonly Node[] => {
+  const { nesting } = card;
+  switch (nesting.kind) {
+    case 'subtask':
+      return [parentLabel(nesting.parentTitle, '親タスク ')];
+    case 'orphan':
+      return [parentLabel('親タスク（未表示）', '')];
+    case 'root':
+      return [];
+    default: {
+      const _exhaustive: never = nesting;
+      throw new Error(`unhandled nesting: ${JSON.stringify(_exhaustive)}`);
+    }
+  }
+};
+
+const breakdown = (card: BoardCard): readonly Node[] => {
+  const { nesting } = card;
+  if (nesting.kind !== 'root') return [];
+  const { todo, doing, done } = nesting.subtaskCounts;
+  if (todo + doing + done === 0) return [];
+  return [el('p', { class: 'breakdown' }, ['サブタスク ', `${STATUS_LABELS.todo} ${todo} / ${STATUS_LABELS.doing} ${doing} / ${STATUS_LABELS.done} ${done}`])];
 };
 
 type Direction = 'up' | 'down' | 'left' | 'right';
@@ -219,7 +220,7 @@ const cardItem = (card: BoardCard, column: BoardColumn, model: ViewModel, handle
     'li',
     {
       class: `card${card.task.boardStatus === 'done' ? ' is-done' : ''}`,
-      draggable: `${!card.orphan}`,
+      draggable: `${card.nesting.kind !== 'orphan'}`,
       tabindex: '-1',
       'aria-labelledby': titleId,
       'aria-busy': `${model.pendingTaskIds.has(card.task.id)}`,
@@ -230,14 +231,14 @@ const cardItem = (card: BoardCard, column: BoardColumn, model: ViewModel, handle
       el('div', { class: 'card-head' }, [
         el('label', { class: 'check-row' }, [checkbox(card.task, handlers), el('span', { class: 'card-title', id: titleId }, [card.task.title === '' ? '（無題）' : card.task.title])]),
       ]),
+      ...nestingMeta(card),
       el('div', { class: 'meta' }, [
         ...dueLabel(card.task, card.overdue),
         ...(model.board.showListBadge ? [el('span', { class: 'badge' }, [el('span', { class: 'sr-only' }, ['リスト ']), card.listTitle])] : []),
-        ...(card.orphan ? [el('span', { class: 'badge muted' }, ['サブタスク'])] : []),
       ]),
       ...(card.task.body === '' ? [] : [el('p', { class: 'body' }, [card.task.body])]),
       ...unknownTagWarning(card.task),
-      ...subtasks(card, model, handlers),
+      ...breakdown(card),
       cardActions(card, column, handlers),
     ],
   );
@@ -274,12 +275,13 @@ type DropTarget = { readonly kind: 'status'; readonly to: BoardStatus } | { read
 const dropTargetFor = (column: BoardColumn, drag: { readonly taskId: string; readonly from: BoardStatus }, list: HTMLElement, clientY: number): DropTarget =>
   drag.from === column.status ? { kind: 'reorder', plan: planReorder(column, drag.taskId, dropIndex(list, clientY)) } : { kind: 'status', to: column.status };
 
-const REJECTED_MESSAGES: Readonly<Record<'otherList' | 'locked', string>> = {
-  otherList: '並べ替えは同じリストのカードの間だけでできます。',
+const REJECTED_MESSAGES: Readonly<Record<RejectReason, string>> = {
+  otherList: 'トップレベルのタスクは、同じリストのトップレベルのタスクの間だけで並べ替えできます。',
+  otherParent: 'サブタスクは、同じ親のサブタスクの間だけで並べ替えできます。',
   locked: '「完了」列のカードと、親が表示されていないサブタスクは並べ替えできません。',
 };
 
-export const rejectedMessage = (reason: 'otherList' | 'locked'): string => REJECTED_MESSAGES[reason];
+export const rejectedMessage = (reason: RejectReason): string => REJECTED_MESSAGES[reason];
 
 const columnSection = (column: BoardColumn, model: ViewModel, handlers: ViewHandlers & { readonly drag: () => Drag; readonly setDrag: (drag: Drag) => void }): HTMLElement => {
   const headingId = `column-${column.status}`;
@@ -299,9 +301,11 @@ const columnSection = (column: BoardColumn, model: ViewModel, handlers: ViewHand
     if (drag.kind !== 'dragging') return;
     const target = dropTargetFor(column, drag, list, event.clientY);
     clearIndicators(section.ownerDocument.body);
-    if (target.kind === 'reorder' && target.plan.kind !== 'move') return;
+    if (target.kind === 'reorder' && target.plan.kind === 'noop') return;
+    // A rejected position still accepts the drop (dropEffect 'none' would cancel it), so `drop` can show why it was refused.
     event.preventDefault();
     if (event.dataTransfer !== null) event.dataTransfer.dropEffect = 'move';
+    if (target.kind === 'reorder' && target.plan.kind === 'rejected') return;
     section.setAttribute('data-drop', 'column');
     if (target.kind === 'reorder') showIndicator(list, dropIndex(list, event.clientY));
   });

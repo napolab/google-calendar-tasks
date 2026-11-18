@@ -46,7 +46,7 @@ const readBoard = (tasks: ITasksService, args: ShowTaskBoardArgs): ResultAsync<T
   selectionFor(tasks, args).andThen((selection) => readTasksListing(tasks, {}).map((listing): TaskBoardPayload => ({ ...listing, selection })));
 
 const DESCRIPTION =
-  "Show the user's Google Tasks as an interactive kanban board (columns todo / doing / done from each task's '[status: …]' notes tag and completion; subtasks nested in their parent card). The user can drag cards between columns, reorder them and tick them off in the board. Use it when the user wants to see or organize their tasks visually. Returns every list with its tasks (the list_tasks shape) plus the preselected list. Adding, editing or deleting tasks is done with the other tools.";
+  "Show the user's Google Tasks as an interactive kanban board (columns todo / doing / done from each task's '[status: …]' notes tag and completion; every subtask is its own card in the column of its own status, labelled with its parent; parent cards show their subtasks per column). The user can drag cards between columns, reorder them among siblings and tick them off in the board. Use it when the user wants to see or organize their tasks visually. Returns every list with its tasks (the list_tasks shape) plus the preselected list. Adding, editing or deleting tasks is done with the other tools.";
 
 export const registerTaskBoardApp = (server: McpServer, deps: ToolDeps, assets: TaskBoardAssets): void => {
   const { tasks } = deps.services;

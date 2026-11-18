@@ -54,6 +54,7 @@ Claude のチャットから、こんな頼み方で使えます。
 - タグがなければ todo、Google 側で完了済みなら done として扱います。
 - ボードでカードを移動するか `set_task_status` を呼ぶと、タグが書き換わります。done に移すと Google 側でも完了になります。
 - Google Tasks アプリでメモの 1 行目を直接書き換えても反映されます。
+- サブタスクも 1 枚のカードとして、自分のタグの列に並びます。カードには親タスク名が付き、親カードには列ごとのサブタスクの数が出ます。並べ替えは同じ親のサブタスクの間だけです。
 
 ## MCP サーバーの構成
 
@@ -70,7 +71,7 @@ Claude ──▶ Cloudflare MCP Server Portal ──▶ Cloudflare Access ──
 - 利用者の認証は Cloudflare Access が行い、Worker は `Cf-Access-Jwt-Assertion` を検証して email を得ます。
 - Access は IdP の Google トークンを origin に渡さないため、Google API 用の OAuth は Worker が別に持ちます（`/google/connect` → `/google/callback`）。refresh token は email ごとの Durable Object に保存します。
 - ツールは Calendar（予定・カレンダー・ACL・freebusy など）と Tasks（タスク・タスクリスト）をほぼ全 API カバーしています。読み出しは LLM 向けに正規化し、書き込みは不正な入力を推測で補わずに拒否します。
-- `show_task_board` は [MCP Apps](https://github.com/modelcontextprotocol/ext-apps) のカンバンボードを返します。列はタスクのメモ 1 行目のタグ `[status: todo|doing|done]` で決まります。
+- `show_task_board` は [MCP Apps](https://github.com/modelcontextprotocol/ext-apps) のカンバンボードを返します。列はタスクのメモ 1 行目のタグ `[status: todo|doing|done]` で決まります。サブタスクも 1 枚のカードとして自分のタグの列に並び、親タスク名が付きます。
 - サーバーの `instructions` で既定（Asia/Tokyo、参加者への通知は明示時のみ、既定タスクリスト `DEFAULT_TASK_LIST`）をクライアントに伝えます。
 
 ## Tech Stack

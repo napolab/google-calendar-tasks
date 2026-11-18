@@ -36,23 +36,35 @@ const home: TaskListPage = { taskListId: 'home', title: 'Home', truncated: true,
 const ids = (board: ReturnType<typeof buildBoard>) => board.columns.map((column) => [column.status, column.cards.map((card) => card.task.id)]);
 
 describe('buildBoard', () => {
-  it('groups top-level tasks into todo / doing / done in list order, then outline order', () => {
+  it('puts every task, subtasks included, in the column of its own status in outline order', () => {
     const board = buildBoard([work, home], { kind: 'all' }, '2026-11-17');
 
     expect(ids(board)).toEqual([
-      ['todo', ['a', 'd', 'h']],
+      ['todo', ['a', 'a2', 'd', 'h']],
       ['doing', ['b']],
-      ['done', ['c']],
+      ['done', ['a1', 'c']],
     ]);
   });
 
-  it('nests subtasks inside their parent card, whatever their own status', () => {
+  it('labels a subtask card with its parent', () => {
     const board = buildBoard([work], { kind: 'all' }, '2026-11-17');
+    const a2 = board.columns[0]?.cards.find((card) => card.task.id === 'a2');
 
-    expect(board.columns[0]?.cards[0]?.subtasks.map((subtask) => [subtask.task.id, subtask.task.boardStatus])).toEqual([
-      ['a1', 'done'],
-      ['a2', 'todo'],
-    ]);
+    expect(a2?.nesting).toEqual({ kind: 'subtask', parentId: 'a', parentTitle: 'a' });
+  });
+
+  it('labels a subtask with （無題） when its parent has an empty title', () => {
+    const list: TaskListPage = { ...work, tasks: [t('p', { title: '' }), t('s', { parent: { kind: 'subtask', parentId: 'p' }, depth: 1 })] };
+    const card = buildBoard([list], { kind: 'all' }, '2026-11-17').columns[0]?.cards.find((c) => c.task.id === 's');
+
+    expect(card?.nesting).toEqual({ kind: 'subtask', parentId: 'p', parentTitle: '（無題）' });
+  });
+
+  it('counts a parent’s subtasks per column, wherever they are shown', () => {
+    const cards = buildBoard([work], { kind: 'all' }, '2026-11-17').columns[0]?.cards ?? [];
+
+    expect(cards.find((card) => card.task.id === 'a')?.nesting).toEqual({ kind: 'root', subtaskCounts: { todo: 1, doing: 0, done: 1 } });
+    expect(cards.find((card) => card.task.id === 'd')?.nesting).toEqual({ kind: 'root', subtaskCounts: { todo: 0, doing: 0, done: 0 } });
   });
 
   it('shows only the selected list (no list badge), and every list with badges for all', () => {
@@ -70,13 +82,13 @@ describe('buildBoard', () => {
     const board = buildBoard([work], { kind: 'list', taskListId: 'gone' }, '2026-11-17');
 
     expect(board.selection).toEqual({ kind: 'all' });
-    expect(board.columns[0]?.cards).toHaveLength(2);
+    expect(board.columns[0]?.cards).toHaveLength(3);
   });
 
   it('carries the list title on each card and the lists for the selector', () => {
     const board = buildBoard([work, home], { kind: 'all' }, '2026-11-17');
 
-    expect(board.columns[0]?.cards[2]).toMatchObject({ listTitle: 'Home' });
+    expect(board.columns[0]?.cards[3]).toMatchObject({ listTitle: 'Home' });
     expect(board.lists).toEqual([
       { taskListId: 'work', title: 'Work' },
       { taskListId: 'home', title: 'Home' },
@@ -103,17 +115,24 @@ describe('buildBoard', () => {
     expect(board.columns[0]?.cards.map((card) => [card.task.id, card.overdue])).toEqual([
       ['past', true],
       ['today', false],
+      ['sub', true],
     ]);
-    expect(board.columns[2]?.cards[0]).toMatchObject({ overdue: false, subtasks: [{ overdue: true }] });
+    expect(board.columns[2]?.cards.map((card) => [card.task.id, card.overdue])).toEqual([['donePast', false]]);
   });
 
   it('marks a subtask whose parent is not in the page as an orphan card', () => {
     const list: TaskListPage = { ...work, tasks: [t('x'), t('o', { parent: { kind: 'subtask', parentId: 'elsewhere' } })] };
 
-    expect(buildBoard([list], { kind: 'all' }, '2026-11-17').columns[0]?.cards.map((card) => [card.task.id, card.orphan])).toEqual([
-      ['x', false],
-      ['o', true],
+    expect(buildBoard([list], { kind: 'all' }, '2026-11-17').columns[0]?.cards.map((card) => [card.task.id, card.nesting.kind])).toEqual([
+      ['x', 'root'],
+      ['o', 'orphan'],
     ]);
+  });
+
+  it('treats a subtask whose parent id is not in its list as an orphan', () => {
+    const list: TaskListPage = { ...work, tasks: [t('x1', { parent: { kind: 'subtask', parentId: 'missing' }, depth: 1 })] };
+
+    expect(buildBoard([list], { kind: 'all' }, '2026-11-17').columns[0]?.cards[0]?.nesting).toEqual({ kind: 'orphan' });
   });
 });
 

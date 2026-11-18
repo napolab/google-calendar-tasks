@@ -47,7 +47,7 @@
   box-sizing: border-box;
 }
 
-/* Collapsed subtasks etc.: `hidden` must win over the display of the element's class. */
+/* `hidden` must win over the display of the element's class. */
 [hidden] {
   display: none !important;
 }
@@ -119,8 +119,7 @@ input {
 
 .tool,
 .chip,
-.icon,
-.disclosure {
+.icon {
   min-height: var(--gb-target);
   border: 1px solid var(--color-border-secondary);
   background: transparent;
@@ -306,8 +305,7 @@ button:disabled {
   overflow-wrap: anywhere;
 }
 
-.is-done > .card-head .card-title,
-.subtask.is-done .subtask-title {
+.is-done > .card-head .card-title {
   color: var(--color-text-tertiary);
   text-decoration: line-through;
 }
@@ -346,10 +344,6 @@ button:disabled {
   color: var(--color-text-secondary);
 }
 
-.badge.muted {
-  color: var(--color-text-tertiary);
-}
-
 .body {
   display: -webkit-box;
   margin: 0;
@@ -369,58 +363,19 @@ button:disabled {
   font-size: var(--gb-text-xs);
 }
 
-.disclosure {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--gb-space-1);
-  align-self: flex-start;
-  padding: 0 var(--gb-space-2);
-  border-color: transparent;
+.parent-label {
+  overflow: hidden;
+  color: var(--color-text-tertiary);
+  font-size: var(--gb-text-xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.breakdown {
+  margin: 0;
   color: var(--color-text-secondary);
   font-size: var(--gb-text-xs);
-  font-weight: var(--font-weight-semibold);
-}
-
-/* Genovese disclosure arrow: a CSS triangle rotated open. */
-.arrow {
-  width: 0;
-  height: 0;
-  border-left: 4px solid transparent;
-  border-right: 4px solid transparent;
-  border-top: 5px solid currentColor;
-  transform: rotate(-90deg);
-  transition: transform 150ms ease-out;
-}
-
-.disclosure[aria-expanded='true'] .arrow {
-  transform: rotate(0deg);
-}
-
-.subtasks {
-  display: flex;
-  flex-direction: column;
-  gap: var(--gb-space-1);
-  margin: 0;
-  padding: 0 0 0 var(--gb-space-3);
-  border-left: 1px solid var(--color-border-tertiary);
-  list-style: none;
-  font-size: var(--gb-text-sm);
-}
-
-.subtask {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 0 var(--gb-space-2);
-}
-
-.subtask .due {
-  font-size: var(--gb-text-xs);
-}
-
-.subtask[aria-busy='true'] {
-  opacity: 0.6;
+  font-variant-numeric: tabular-nums;
 }
 
 .actions {

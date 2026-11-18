@@ -7,7 +7,7 @@ import type { BoardStatus, ListedTaskItem, TaskItem, TaskListPage } from '../wir
 
 export type PendingOp = { readonly id: number } & (
   | { readonly kind: 'status'; readonly taskId: string; readonly taskListId: string; readonly to: BoardStatus }
-  | { readonly kind: 'reorder'; readonly taskId: string; readonly taskListId: string; readonly placement: Placement }
+  | { readonly kind: 'reorder'; readonly taskId: string; readonly taskListId: string; readonly parent: TaskItem['parent']; readonly placement: Placement }
 );
 
 export type Notice = { readonly kind: 'none' } | { readonly kind: 'info'; readonly message: string } | { readonly kind: 'error'; readonly message: string };
@@ -38,10 +38,26 @@ const blockEnd = (tasks: readonly ListedTaskItem[], index: number): number => {
   return next === -1 ? tasks.length : next;
 };
 
-const insertionIndex = (rest: readonly ListedTaskItem[], placement: Placement): number => {
+// `first` is the top of the list for a top-level task, but right under its parent for a subtask.
+const firstIndex = (rest: readonly ListedTaskItem[], parent: TaskItem['parent']): number => {
+  switch (parent.kind) {
+    case 'root':
+      return 0;
+    case 'subtask': {
+      const parentIndex = rest.findIndex((task) => task.id === parent.parentId);
+      return parentIndex === -1 ? -1 : parentIndex + 1;
+    }
+    default: {
+      const _exhaustive: never = parent;
+      throw new Error(`unhandled parent: ${JSON.stringify(_exhaustive)}`);
+    }
+  }
+};
+
+const insertionIndex = (rest: readonly ListedTaskItem[], parent: TaskItem['parent'], placement: Placement): number => {
   switch (placement.kind) {
     case 'first':
-      return 0;
+      return firstIndex(rest, parent);
     case 'after': {
       const previous = rest.findIndex((task) => task.id === placement.previousId);
       return previous === -1 ? -1 : blockEnd(rest, previous);
@@ -54,14 +70,14 @@ const insertionIndex = (rest: readonly ListedTaskItem[], placement: Placement): 
 };
 
 const reorder =
-  (taskId: string, placement: Placement) =>
+  (taskId: string, parent: TaskItem['parent'], placement: Placement) =>
   (tasks: readonly ListedTaskItem[]): readonly ListedTaskItem[] => {
     const start = tasks.findIndex((task) => task.id === taskId);
     if (start === -1) return tasks;
     const end = blockEnd(tasks, start);
     const block = tasks.slice(start, end);
     const rest = [...tasks.slice(0, start), ...tasks.slice(end)];
-    const at = insertionIndex(rest, placement);
+    const at = insertionIndex(rest, parent, placement);
     if (at === -1) return tasks;
     return [...rest.slice(0, at), ...block, ...rest.slice(at)];
   };
@@ -71,7 +87,7 @@ const applyOp = (lists: readonly TaskListPage[], op: PendingOp): readonly TaskLi
     case 'status':
       return mapList(lists, op.taskListId, (tasks) => tasks.map((task) => (task.id === op.taskId ? { ...task, boardStatus: op.to } : task)));
     case 'reorder':
-      return mapList(lists, op.taskListId, reorder(op.taskId, op.placement));
+      return mapList(lists, op.taskListId, reorder(op.taskId, op.parent, op.placement));
     default: {
       const _exhaustive: never = op;
       throw new Error(`unhandled op: ${JSON.stringify(_exhaustive)}`);
