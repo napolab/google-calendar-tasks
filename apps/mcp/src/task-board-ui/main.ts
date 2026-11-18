@@ -5,6 +5,7 @@ import { buildBoard, tokyoToday } from './board';
 import { INITIAL_BOARD_STATE, reduceBoard, visibleLists } from './board-state';
 import { planStatusChange } from './moves';
 import { serverToolName } from './tool-name';
+import { toolCallFor } from './tool-call';
 import { createBoardView, rejectedMessage } from './view';
 import { parseBoardPayload, parseListing, parseTask } from './wire';
 import './styles.css';
@@ -28,7 +29,6 @@ const app = new App({ name: 'gct-task-board', version: '0.1.0' }, { availableDis
 
 let state: BoardState = INITIAL_BOARD_STATE;
 let selection: BoardSelection = { kind: 'all' };
-let collapsed: ReadonlySet<string> = new Set();
 let loading = true;
 let nextOpId = 1;
 let noticeTimer: ReturnType<typeof setTimeout> | undefined;
@@ -42,7 +42,6 @@ const render = (): void => {
   view({
     board,
     pendingTaskIds: new Set(state.pending.map((op) => op.taskId)),
-    collapsedCardIds: collapsed,
     notice: state.notice,
     loading,
     fullscreen: fullscreenOf(hostContext),
@@ -82,26 +81,10 @@ const settle = (opId: number, parsed: Parsed<TaskItem>): void => {
   }
 };
 
-const argsFor = (op: PendingOp): { readonly name: ServerToolName; readonly args: Record<string, string> } => {
-  switch (op.kind) {
-    case 'status':
-      return { name: 'set_task_status', args: { taskId: op.taskId, list: op.taskListId, status: op.to } };
-    case 'reorder':
-      return {
-        name: 'move_task',
-        args: op.placement.kind === 'after' ? { taskId: op.taskId, list: op.taskListId, previousId: op.placement.previousId } : { taskId: op.taskId, list: op.taskListId },
-      };
-    default: {
-      const _exhaustive: never = op;
-      throw new Error(`unhandled op: ${JSON.stringify(_exhaustive)}`);
-    }
-  }
-};
-
 // Optimistic: the change shows at once and is rolled back if the tool call fails.
 const run = async (op: PendingOp): Promise<void> => {
   dispatch({ type: 'started', op });
-  const { name, args } = argsFor(op);
+  const { name, args } = toolCallFor(op);
   settle(op.id, parseTask(await callTool(name, args)));
 };
 
@@ -119,7 +102,7 @@ const reorder = (plan: ReorderPlan): void => {
       dispatch({ type: 'noticed', message: rejectedMessage(plan.reason) });
       return;
     case 'move':
-      void run({ id: nextOpId++, kind: 'reorder', taskId: plan.taskId, taskListId: plan.taskListId, placement: plan.placement });
+      void run({ id: nextOpId++, kind: 'reorder', taskId: plan.taskId, taskListId: plan.taskListId, parent: plan.parent, placement: plan.placement });
       return;
     default: {
       const _exhaustive: never = plan;
@@ -167,10 +150,6 @@ const view = createBoardView(root, {
   toggleFullscreen: () => void toggleFullscreen(),
   changeStatus,
   reorder,
-  toggleSubtasks: (cardId) => {
-    collapsed = collapsed.has(cardId) ? new Set([...collapsed].filter((id) => id !== cardId)) : new Set([...collapsed, cardId]);
-    render();
-  },
   dismissNotice: () => dispatch({ type: 'dismissed' }),
 });
 

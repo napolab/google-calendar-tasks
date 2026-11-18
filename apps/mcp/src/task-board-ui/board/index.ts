@@ -2,19 +2,24 @@ import { DEFAULT_TIME_ZONE, dayjs } from '@napolab/gct-core/dayjs';
 
 import type { BoardSelection, BoardStatus, ListedTaskItem, TaskItem, TaskListPage } from '../wire';
 
-// The board model: lists of tasks (outline order) → three columns of cards, subtasks nested in their parent card.
+// The board model: lists of tasks (outline order) → three columns of cards, every task (subtasks too) is its own card in the column of its status.
 
 export const BOARD_STATUSES: readonly BoardStatus[] = ['todo', 'doing', 'done'];
 
-export type BoardSubtask = { readonly task: TaskItem; readonly depth: number; readonly overdue: boolean };
+export type SubtaskCounts = Readonly<Record<BoardStatus, number>>;
+
+// root: a top-level task (counts of its subtasks per column; all 0 = no subtasks).
+// subtask: shown under its parent's title. orphan: a subtask whose parent is not in the page (never reordered).
+export type CardNesting =
+  | { readonly kind: 'root'; readonly subtaskCounts: SubtaskCounts }
+  | { readonly kind: 'subtask'; readonly parentId: string; readonly parentTitle: string }
+  | { readonly kind: 'orphan' };
 
 export type BoardCard = {
   readonly task: TaskItem;
   readonly listTitle: string;
   readonly overdue: boolean;
-  readonly subtasks: readonly BoardSubtask[];
-  // A subtask whose parent is not on the page: shown as a card, but never reordered (move_task would un-nest it).
-  readonly orphan: boolean;
+  readonly nesting: CardNesting;
 };
 
 export type BoardColumn = { readonly status: BoardStatus; readonly cards: readonly BoardCard[] };
@@ -61,14 +66,37 @@ const effectiveSelection = (lists: readonly TaskListPage[], selection: BoardSele
 
 const isShown = (selection: BoardSelection, list: TaskListPage): boolean => selection.kind === 'all' || selection.taskListId === list.taskListId;
 
-// Outline order → cards: each depth-0 task opens a card, deeper tasks join the card above.
+const UNTITLED = '（無題）';
+
+const countSubtasks = (task: ListedTaskItem, list: TaskListPage): SubtaskCounts => {
+  const children = list.tasks.filter((other) => other.parent.kind === 'subtask' && other.parent.parentId === task.id);
+  return {
+    todo: children.filter((child) => child.boardStatus === 'todo').length,
+    doing: children.filter((child) => child.boardStatus === 'doing').length,
+    done: children.filter((child) => child.boardStatus === 'done').length,
+  };
+};
+
+const nestingOf = (task: ListedTaskItem, list: TaskListPage): CardNesting => {
+  switch (task.parent.kind) {
+    case 'root':
+      return task.depth === 0 ? { kind: 'root', subtaskCounts: countSubtasks(task, list) } : { kind: 'orphan' };
+    case 'subtask': {
+      const { parentId } = task.parent;
+      const parent = list.tasks.find((other) => other.id === parentId);
+      if (parent === undefined) return { kind: 'orphan' };
+      return { kind: 'subtask', parentId, parentTitle: parent.title === '' ? UNTITLED : parent.title };
+    }
+    default: {
+      const _exhaustive: never = task.parent;
+      throw new Error(`unhandled parent: ${JSON.stringify(_exhaustive)}`);
+    }
+  }
+};
+
+// Outline order → one card per task.
 const cardsOf = (list: TaskListPage, today: string): readonly BoardCard[] =>
-  list.tasks.reduce<readonly BoardCard[]>((cards, task: ListedTaskItem) => {
-    if (task.depth === 0) return [...cards, { task, listTitle: list.title, overdue: isOverdue(task, today), subtasks: [], orphan: task.parent.kind === 'subtask' }];
-    const last = cards.at(-1);
-    if (last === undefined) return cards;
-    return [...cards.slice(0, -1), { ...last, subtasks: [...last.subtasks, { task, depth: task.depth, overdue: isOverdue(task, today) }] }];
-  }, []);
+  list.tasks.map((task) => ({ task, listTitle: list.title, overdue: isOverdue(task, today), nesting: nestingOf(task, list) }));
 
 export const buildBoard = (lists: readonly TaskListPage[], selection: BoardSelection, today: string): Board => {
   const shownSelection = effectiveSelection(lists, selection);

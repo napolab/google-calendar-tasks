@@ -22,7 +22,7 @@ const work: TaskListPage = {
   taskListId: 'work',
   title: 'Work',
   truncated: false,
-  tasks: [t('a'), t('a1', { parent: { kind: 'subtask', parentId: 'a' }, depth: 1 }), t('b'), t('c')],
+  tasks: [t('a'), t('a1', { parent: { kind: 'subtask', parentId: 'a' }, depth: 1 }), t('a2', { parent: { kind: 'subtask', parentId: 'a' }, depth: 1 }), t('b'), t('c')],
 };
 const home: TaskListPage = { taskListId: 'home', title: 'Home', truncated: false, tasks: [t('h', { taskListId: 'home' })] };
 
@@ -61,7 +61,7 @@ describe('reduceBoard', () => {
     const state = run([loaded, { type: 'started', op: toDoing }, { type: 'succeeded', opId: 1, task: fromServer }]);
 
     expect(state.pending).toEqual([]);
-    expect(visibleLists(state)[0]?.tasks[2]).toEqual({ ...fromServer, depth: 0 });
+    expect(visibleLists(state)[0]?.tasks[3]).toEqual({ ...fromServer, depth: 0 });
   });
 
   it('rolls back only the failed one of two concurrent changes', () => {
@@ -80,32 +80,50 @@ describe('reduceBoard', () => {
 
   describe('reorder', () => {
     it('moves a task (with its subtasks) to the top of its list', () => {
-      const state = run([loaded, { type: 'started', op: { id: 1, kind: 'reorder', taskId: 'c', taskListId: 'work', placement: { kind: 'first' } } }]);
+      const state = run([loaded, { type: 'started', op: { id: 1, kind: 'reorder', taskId: 'c', taskListId: 'work', parent: { kind: 'root' }, placement: { kind: 'first' } } }]);
 
-      expect(order(state)).toEqual(['c', 'a', 'a1', 'b']);
+      expect(order(state)).toEqual(['c', 'a', 'a1', 'a2', 'b']);
     });
 
     it('moves a task after a sibling, past that sibling’s subtasks', () => {
-      const state = run([loaded, { type: 'started', op: { id: 1, kind: 'reorder', taskId: 'c', taskListId: 'work', placement: { kind: 'after', previousId: 'a' } } }]);
+      const state = run([loaded, { type: 'started', op: { id: 1, kind: 'reorder', taskId: 'c', taskListId: 'work', parent: { kind: 'root' }, placement: { kind: 'after', previousId: 'a' } } }]);
 
-      expect(order(state)).toEqual(['a', 'a1', 'c', 'b']);
+      expect(order(state)).toEqual(['a', 'a1', 'a2', 'c', 'b']);
     });
 
     it('carries a parent’s subtasks along', () => {
-      const state = run([loaded, { type: 'started', op: { id: 1, kind: 'reorder', taskId: 'a', taskListId: 'work', placement: { kind: 'after', previousId: 'c' } } }]);
+      const state = run([loaded, { type: 'started', op: { id: 1, kind: 'reorder', taskId: 'a', taskListId: 'work', parent: { kind: 'root' }, placement: { kind: 'after', previousId: 'c' } } }]);
 
-      expect(order(state)).toEqual(['b', 'c', 'a', 'a1']);
+      expect(order(state)).toEqual(['b', 'c', 'a', 'a1', 'a2']);
     });
 
     it('rolls a failed reorder back, and keeps a succeeded one after the server answers', () => {
-      const op: PendingOp = { id: 1, kind: 'reorder', taskId: 'c', taskListId: 'work', placement: { kind: 'first' } };
+      const op: PendingOp = { id: 1, kind: 'reorder', taskId: 'c', taskListId: 'work', parent: { kind: 'root' }, placement: { kind: 'first' } };
 
-      expect(order(run([loaded, { type: 'started', op }, { type: 'failed', opId: 1, message: 'x' }]))).toEqual(['a', 'a1', 'b', 'c']);
-      expect(order(run([loaded, { type: 'started', op }, { type: 'succeeded', opId: 1, task: t('c') }]))).toEqual(['c', 'a', 'a1', 'b']);
+      expect(order(run([loaded, { type: 'started', op }, { type: 'failed', opId: 1, message: 'x' }]))).toEqual(['a', 'a1', 'a2', 'b', 'c']);
+      expect(order(run([loaded, { type: 'started', op }, { type: 'succeeded', opId: 1, task: t('c') }]))).toEqual(['c', 'a', 'a1', 'a2', 'b']);
+    });
+
+    it('moves a subtask first among its siblings, right under its parent', () => {
+      const op: PendingOp = { id: 1, kind: 'reorder', taskId: 'a2', taskListId: 'work', parent: { kind: 'subtask', parentId: 'a' }, placement: { kind: 'first' } };
+
+      expect(order(run([loaded, { type: 'started', op }]))).toEqual(['a', 'a2', 'a1', 'b', 'c']);
+    });
+
+    it('moves a subtask after a sibling', () => {
+      const op: PendingOp = { id: 1, kind: 'reorder', taskId: 'a1', taskListId: 'work', parent: { kind: 'subtask', parentId: 'a' }, placement: { kind: 'after', previousId: 'a2' } };
+
+      expect(order(run([loaded, { type: 'started', op }]))).toEqual(['a', 'a2', 'a1', 'b', 'c']);
+    });
+
+    it('leaves the order unchanged when a subtask is moved first under a parent that is not in the list', () => {
+      const op: PendingOp = { id: 1, kind: 'reorder', taskId: 'a2', taskListId: 'work', parent: { kind: 'subtask', parentId: 'missing' }, placement: { kind: 'first' } };
+
+      expect(order(run([loaded, { type: 'started', op }]))).toEqual(['a', 'a1', 'a2', 'b', 'c']);
     });
 
     it('leaves other lists alone', () => {
-      const state = run([loaded, { type: 'started', op: { id: 1, kind: 'reorder', taskId: 'c', taskListId: 'work', placement: { kind: 'first' } } }]);
+      const state = run([loaded, { type: 'started', op: { id: 1, kind: 'reorder', taskId: 'c', taskListId: 'work', parent: { kind: 'root' }, placement: { kind: 'first' } } }]);
 
       expect(order(state, 1)).toEqual(['h']);
     });
