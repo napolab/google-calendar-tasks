@@ -18,7 +18,7 @@ const card = (id: string, taskListId = 'work', overrides: Partial<BoardCard> = {
   },
   listTitle: taskListId,
   overdue: false,
-  nesting: { kind: 'root', subtaskCounts: { todo: 0, doing: 0, done: 0 } },
+  nesting: { kind: 'root', subtaskCounts: { todo: 0, doing: 0, done: 0 }, subtaskCountsPartial: false },
   ...overrides,
 });
 
@@ -82,8 +82,37 @@ describe('planReorder', () => {
       expect(planReorder(col, 'a1', 5)).toEqual({ kind: 'rejected', reason: 'otherParent' });
     });
 
-    it('rejects a top-level card dropped between subtask cards', () => {
-      expect(planReorder(col, 'd', 2)).toEqual({ kind: 'rejected', reason: 'otherList' });
+    it('rejects a top-level card dropped between a parent and its subtask cards', () => {
+      expect(planReorder(col, 'd', 2)).toEqual({ kind: 'rejected', reason: 'insideFamily' });
+    });
+  });
+
+  describe('a top-level card dropped near subtask cards', () => {
+    it('rejects a drop inside a parent / subtask group', () => {
+      const col = column([card('a'), sub('a1', 'a'), sub('a2', 'a'), card('d')]);
+
+      expect(planReorder(col, 'd', 1)).toEqual({ kind: 'rejected', reason: 'insideFamily' });
+      expect(planReorder(col, 'd', 2)).toEqual({ kind: 'rejected', reason: 'insideFamily' });
+    });
+
+    it('lands after the family of the nearest same-list card above (a foreign subtask below does not matter)', () => {
+      const foreign = column([card('a'), sub('b1', 'b'), card('d')]);
+      const foreignOnly = column([sub('a1', 'a'), sub('b1', 'b'), card('d')]);
+
+      expect(planReorder(foreign, 'd', 1)).toEqual({ kind: 'move', taskId: 'd', taskListId: 'work', parent: { kind: 'root' }, placement: { kind: 'after', previousId: 'a' } });
+      expect(planReorder(foreignOnly, 'd', 1)).toMatchObject({ kind: 'move', placement: { kind: 'after', previousId: 'a' } });
+    });
+
+    it('lands after the parent when dropped below the last subtask of a family', () => {
+      const col = column([card('a'), sub('a1', 'a'), card('d'), card('e')]);
+
+      expect(planReorder(col, 'e', 2)).toMatchObject({ kind: 'move', placement: { kind: 'after', previousId: 'a' } });
+    });
+
+    it('is a no-op when dropped under its own subtask', () => {
+      const col = column([card('x'), card('d'), sub('d1', 'd'), card('y')]);
+
+      expect(planReorder(col, 'd', 3)).toEqual({ kind: 'noop' });
     });
   });
 
@@ -108,6 +137,14 @@ describe('keyboardTargetIndex', () => {
     expect(planReorder(col, 'd', keyboardTargetIndex(col, 'd', 'up'))).toMatchObject({ placement: { kind: 'first' } });
     expect(planReorder(col, 'a', keyboardTargetIndex(col, 'a', 'down'))).toMatchObject({ placement: { kind: 'after', previousId: 'd' } });
     expect(planReorder(col, 'a1', keyboardTargetIndex(col, 'a1', 'up'))).toEqual({ kind: 'noop' });
+  });
+
+  it('moves a top-level card down past the next card and its subtask cards', () => {
+    const col = column([card('a'), card('d'), sub('d1', 'd'), sub('d2', 'd')]);
+    const onlyAfterFamily = column([card('a'), card('b'), sub('b1', 'b'), card('c')]);
+
+    expect(planReorder(col, 'a', keyboardTargetIndex(col, 'a', 'down'))).toMatchObject({ kind: 'move', placement: { kind: 'after', previousId: 'd' } });
+    expect(planReorder(onlyAfterFamily, 'a', keyboardTargetIndex(onlyAfterFamily, 'a', 'down'))).toMatchObject({ kind: 'move', placement: { kind: 'after', previousId: 'b' } });
   });
 
   it('stays in place at either end', () => {
