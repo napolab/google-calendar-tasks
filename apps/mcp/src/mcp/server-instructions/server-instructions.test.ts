@@ -1,3 +1,4 @@
+import { writeStatusTag } from '@napolab/gct-core/tasks';
 import { describe, expect, it } from 'vitest';
 
 import { toSendUpdates } from '../calendar/shared';
@@ -33,6 +34,17 @@ describe('buildServerInstructions', () => {
     expect(buildServerInstructions({ defaultTaskList: 'Inbox', timeZone: TOOL_TIME_ZONE })).toContain('"Inbox"');
     expect(instructions).toMatch(/list_tasks and show_task_board without list cover EVERY list/);
     expect(instructions).toContain('taskListId');
+  });
+
+  it('explains the task board: when to open it, where columns come from, and how to change a column', () => {
+    expect(instructions).toContain('show_task_board');
+    // The tag spelling comes from core's writer, so a format change there fails here.
+    expect(instructions).toContain(writeStatusTag('', 'todo'));
+    expect(instructions).toContain(writeStatusTag('', 'doing'));
+    expect(instructions).toContain('[status: doing]');
+    expect(instructions).toContain('no tag = todo');
+    expect(instructions).toContain('own card');
+    expect(instructions).toContain('set_task_status');
   });
 
   it('only names tools the server registers', () => {
